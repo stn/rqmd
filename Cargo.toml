@@ -20,7 +20,9 @@ rmd-core = { path = "crates/rmd-core", version = "0.0.1" }
 rmd-llm  = { path = "crates/rmd-llm",  version = "0.0.1" }
 rmd-mcp  = { path = "crates/rmd-mcp",  version = "0.0.1" }
 
-serde     = { version = "1", features = ["derive"] }
-indexmap  = { version = "2", features = ["serde"] }
-thiserror = "2"
-tempfile  = "3"
+serde      = { version = "1", features = ["derive"] }
+indexmap   = { version = "2", features = ["serde"] }
+thiserror  = "2"
+tempfile   = "3"
+rusqlite   = { version = "0.39", features = ["bundled", "load_extension"] }
+sqlite-vec = "0.1.9"
