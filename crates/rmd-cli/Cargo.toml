@@ -12,6 +12,9 @@ name = "rmd"
 path = "src/main.rs"
 
 [dependencies]
-rmd-core = { workspace = true }
-rmd-llm  = { workspace = true }
-rmd-mcp  = { workspace = true }
+rmd-core   = { workspace = true }
+rmd-llm    = { workspace = true }
+rmd-mcp    = { workspace = true }
+clap       = { version = "4", features = ["derive", "wrap_help"] }
+anyhow     = "1"
+serde_json = "1"
