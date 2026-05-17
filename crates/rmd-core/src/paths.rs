@@ -49,3 +49,23 @@ pub fn config_dir() -> PathBuf {
 pub fn config_file_path(index_name: &str) -> PathBuf {
     config_dir().join(format!("{index_name}.yml"))
 }
+
+/// Resolve the directory that holds rmd's cache data (SQLite index).
+///
+/// Precedence: `RMD_CACHE_DIR` > `XDG_CACHE_HOME/rmd` > `~/.cache/rmd`.
+/// Mirrors qmd's `getDefaultDbPath` (`store.ts:547–550`) which uses
+/// `XDG_CACHE_HOME`, not `XDG_CONFIG_HOME`. All checks are performed
+/// per-call so that test harnesses can mutate env vars between operations.
+pub fn cache_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("RMD_CACHE_DIR")
+        && !d.is_empty()
+    {
+        return d.into();
+    }
+    if let Some(d) = std::env::var_os("XDG_CACHE_HOME")
+        && !d.is_empty()
+    {
+        return PathBuf::from(d).join("rmd");
+    }
+    rmd_homedir().join(".cache").join("rmd")
+}
