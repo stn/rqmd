@@ -8,3 +8,11 @@ authors.workspace    = true
 repository.workspace = true
 
 [dependencies]
+serde        = { workspace = true }
+serde_norway = "0.9"
+indexmap     = { workspace = true }
+thiserror    = { workspace = true }
+
+[dev-dependencies]
+serial_test = "3"
+tempfile    = { workspace = true }
