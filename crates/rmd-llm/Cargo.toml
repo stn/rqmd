@@ -10,17 +10,37 @@ repository.workspace = true
 [dependencies]
 rmd-core = { workspace = true }
 
-[dev-dependencies]
-# Spike-only — see crates/rmd-llm/examples/*. These dependencies do not affect
-# the production build of rmd-llm (which is currently empty besides VERSION).
-# Pinned to the same versions the upstream llama-cpp-rs workspace uses.
+# LLM backend.
 #
-# GPU acceleration is intentionally not wired through rmd-llm features here:
-# Cargo features pointing at dev-dependencies are brittle, and the spikes only
-# need to prove that the llama-cpp-2 API compiles and produces a vector — CPU
-# is sufficient. To run a spike with a GPU backend, edit this file locally to
-# add the corresponding feature (e.g. `features = ["metal"]` on llama-cpp-2).
+# We rely on the upstream default features (`openmp`, `android-shared-stdcxx`).
+# OpenMP is what gives us CPU parallelism inside llama.cpp during decode; if a
+# future contributor switches to `default-features = false`, they MUST add
+# `features = ["openmp"]` back, or batch embedding becomes single-threaded.
 llama-cpp-2 = "0.1"
-hf-hub      = "0.4"
-anyhow      = "1"
 encoding_rs = "0.8"
+
+# HuggingFace model download. Pinned to 0.4 to match upstream llama-cpp-rs
+# workspace; verify 0.4 vs 0.5 snapshot semantics before bumping.
+hf-hub = "0.4"
+
+# Utilities
+serde     = { workspace = true }
+thiserror = { workspace = true }
+regex     = "1"
+dirs      = "5"
+tracing   = "0.1"
+
+[dev-dependencies]
+tempfile    = { workspace = true }
+anyhow      = "1"
+# Used by spike examples and tests that read environment variables; ensures
+# they don't race with `cargo test`'s default parallel execution.
+serial_test = "3"
+# For serde roundtrip tests on the public types.
+serde_json  = "1"
+
+[features]
+default = []
+metal   = ["llama-cpp-2/metal"]
+cuda    = ["llama-cpp-2/cuda"]
+vulkan  = ["llama-cpp-2/vulkan"]
