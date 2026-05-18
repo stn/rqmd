@@ -31,9 +31,7 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         .collect();
 
     let store = state.store_mut()?;
-    let db_empty = store
-        .with_connection(|conn| list_collections(conn))?
-        .is_empty();
+    let db_empty = store.with_connection(list_collections)?.is_empty();
 
     if snapshot.is_empty() {
         if db_empty {
@@ -50,9 +48,7 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
     }
 
     // Clear stale LLM cache once per update pass (mirrors qmd line 636).
-    state
-        .store_mut()?
-        .with_connection(|conn| clear_cache(conn))?;
+    state.store_mut()?.with_connection(clear_cache)?;
 
     println!(
         "{}Updating {} collection(s)...{}\n",

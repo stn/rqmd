@@ -29,7 +29,7 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         .collect();
 
     let store = state.store_mut()?;
-    let collections = store.with_connection(|conn| list_collections(conn))?;
+    let collections = store.with_connection(list_collections)?;
 
     let (total_docs, vector_count, most_recent): (i64, i64, Option<String>) =
         store.with_connection(|conn| {

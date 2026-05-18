@@ -14,7 +14,7 @@ use crate::state::IndexState;
 
 pub fn run(a: LsArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
     let store = state.store_mut()?;
-    let collections = store.with_connection(|conn| list_collections(conn))?;
+    let collections = store.with_connection(list_collections)?;
 
     let Some(arg) = a.path else {
         // No argument: list all collections.

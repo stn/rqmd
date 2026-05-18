@@ -48,7 +48,7 @@ fn list(state: &mut IndexState, p: &Palette) -> Result<()> {
         .collect();
 
     let store = state.store_mut()?;
-    let collections = store.with_connection(|conn| store_context::list_collections(conn))?;
+    let collections = store.with_connection(store_context::list_collections)?;
 
     if collections.is_empty() {
         println!("No collections found. Run 'rmd collection add .' to create one.");
