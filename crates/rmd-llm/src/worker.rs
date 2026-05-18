@@ -162,10 +162,7 @@ fn run_embed_worker(
         }
     };
 
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(non_zero_ctx(n_ctx)))
-        .with_embeddings(true)
-        .with_pooling_type(pooling);
+    let ctx_params = make_pool_ctx_params(n_ctx, pooling);
     let mut ctx = match model.new_context(backend, ctx_params) {
         Ok(c) => c,
         Err(e) => {
@@ -185,6 +182,30 @@ fn run_embed_worker(
         // Drop the reply if the caller already abandoned it.
         let _ = job.reply.send(out);
     }
+}
+
+/// Build `LlamaContextParams` for an encoder-style pool (embedding or
+/// pooled-rank rerank).
+///
+/// llama.cpp asserts `n_ubatch >= n_tokens` for any single sequence in
+/// a single forward pass — required by encoder-only / pooled models.
+/// Defaults of `n_batch = n_ubatch = 512` are too small for any
+/// non-trivial document. Pinning both to `n_ctx` is the natural ceiling:
+/// anything that fits in the context window also fits in a single
+/// ubatch (the pattern used in llama.cpp's own `examples/embedding`).
+///
+/// `n_ctx` is resolved from `QMD_{EMBED,RERANK}_CONTEXT_SIZE` / config /
+/// `DEFAULT_*_CONTEXT_SIZE`. `CHUNK_SIZE_TOKENS = 900` is the chunker
+/// invariant this ceiling must accommodate (see the warning in
+/// `store_ops::embed::generate_embeddings`).
+fn make_pool_ctx_params(n_ctx: usize, pooling: LlamaPoolingType) -> LlamaContextParams {
+    let n_ctx_u32 = n_ctx.max(1) as u32;
+    LlamaContextParams::default()
+        .with_n_ctx(Some(non_zero_ctx(n_ctx)))
+        .with_n_batch(n_ctx_u32)
+        .with_n_ubatch(n_ctx_u32)
+        .with_embeddings(true)
+        .with_pooling_type(pooling)
 }
 
 fn process_embed_batch(
@@ -304,10 +325,7 @@ fn run_rerank_worker(
         }
     };
 
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(non_zero_ctx(n_ctx)))
-        .with_embeddings(true)
-        .with_pooling_type(LlamaPoolingType::Rank);
+    let ctx_params = make_pool_ctx_params(n_ctx, LlamaPoolingType::Rank);
     let mut ctx = match model.new_context(backend, ctx_params) {
         Ok(c) => c,
         Err(e) => {

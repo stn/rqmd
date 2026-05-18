@@ -244,6 +244,18 @@ impl LlamaCpp {
         &self.rerank_model_uri
     }
 
+    /// Resolved embed-pool context size (env / config / default).
+    /// `store_ops::embed` uses this to warn if it's smaller than
+    /// `CHUNK_SIZE_TOKENS`.
+    pub fn embed_context_size(&self) -> usize {
+        self.embed_context_size
+    }
+
+    /// Resolved rerank-pool context size.
+    pub fn rerank_context_size(&self) -> usize {
+        self.rerank_context_size
+    }
+
     pub fn ci_mode(&self) -> bool {
         self.ci_mode
     }
@@ -827,8 +839,17 @@ fn run_chat_decode(
         .apply_chat_template(&template, messages, /* add_ass */ true)
         .map_err(|e| Error::ChatTemplate(format!("apply_chat_template: {e}")))?;
 
+    // Decoder context: llama.cpp chunks prefill across multiple decodes if
+    // n_ubatch < prompt length, so the encoder assertion that triggers on
+    // the embed/rerank pools doesn't fire here. We still pin
+    // n_batch = n_ubatch = n_ctx for two reasons: defense (if a future
+    // encoder-decoder generate path is added it inherits a safe ceiling),
+    // and uniform shape across all 4 context init sites in this crate.
+    let n_ctx_u32 = n_ctx.max(1) as u32;
     let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(n_ctx.max(1) as u32).expect("non-zero")));
+        .with_n_ctx(Some(NonZeroU32::new(n_ctx_u32).expect("non-zero")))
+        .with_n_batch(n_ctx_u32)
+        .with_n_ubatch(n_ctx_u32);
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| Error::Llama(format!("ctx init: {e}")))?;

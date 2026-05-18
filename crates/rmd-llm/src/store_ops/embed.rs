@@ -16,7 +16,7 @@ use rmd_core::store::embeddings::{
 };
 use rmd_core::store::path::now_rfc3339;
 use rmd_core::store::{
-    Store, DEFAULT_EMBED_MAX_BATCH_BYTES, DEFAULT_EMBED_MAX_DOCS_PER_BATCH,
+    Store, CHUNK_SIZE_TOKENS, DEFAULT_EMBED_MAX_BATCH_BYTES, DEFAULT_EMBED_MAX_DOCS_PER_BATCH,
 };
 
 use crate::config::resolve_embed_model;
@@ -129,6 +129,24 @@ pub async fn generate_embeddings(
     options: EmbedOptions,
 ) -> Result<EmbedResult> {
     let start = Instant::now();
+
+    // Sanity check: the chunker emits chunks up to CHUNK_SIZE_TOKENS, which
+    // must fit inside a single embed-pool ubatch. The embed pool pins
+    // n_ubatch = embed_context_size (see `worker::make_pool_ctx_params`), so
+    // a context smaller than CHUNK_SIZE_TOKENS will either truncate inputs
+    // or hit the encoder assertion. Warn instead of erroring — users may
+    // intentionally shrink the context for short-text corpora.
+    let embed_ctx = llm.embed_context_size();
+    if embed_ctx < CHUNK_SIZE_TOKENS {
+        tracing::warn!(
+            "embed_context_size ({}) < CHUNK_SIZE_TOKENS ({}); large chunks will hit the \
+             encoder assertion or be rejected. Set QMD_EMBED_CONTEXT_SIZE to at least {}.",
+            embed_ctx,
+            CHUNK_SIZE_TOKENS,
+            CHUNK_SIZE_TOKENS,
+        );
+    }
+
     let model = options
         .model
         .clone()
