@@ -23,6 +23,18 @@ encoding_rs = "0.8"
 # workspace; verify 0.4 vs 0.5 snapshot semantics before bumping.
 hf-hub = "0.4"
 
+# Async runtime — the public `Llm` trait is async, and parallel embed /
+# rerank fan-out uses tokio::sync::oneshot to bridge the dedicated FFI
+# worker threads back to the async caller.
+tokio       = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio-util  = "0.7"
+async-trait = "0.1"
+futures     = "0.3"
+
+# Lock-free singleton + model/pool slots without holding a std::sync::Mutex
+# across an .await (clippy::await_holding_lock would reject that).
+arc-swap = "1"
+
 # Utilities
 serde     = { workspace = true }
 thiserror = { workspace = true }
