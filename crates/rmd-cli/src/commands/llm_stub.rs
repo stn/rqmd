@@ -1,11 +1,11 @@
-//! Stubs for LLM-dependent commands (`search`, `vsearch`, `query`, `embed`,
-//! `pull`, `mcp`). Their `clap` definitions exist so `--help` is complete,
-//! but actually executing them requires the not-yet-ported `rmd-llm` /
-//! `rmd-mcp` crates. Exit 2 distinguishes "not implemented" from real errors.
+//! Stub for the still-unimplemented `mcp` command. After PR2, only this
+//! subcommand needs the placeholder — `search` / `vsearch` / `query` /
+//! `embed` / `pull` are wired up. Exit 2 distinguishes "not implemented"
+//! from real errors.
 
 use anyhow::Result;
 
 pub fn run(cmd: &str) -> Result<()> {
-    eprintln!("error: '{cmd}' requires the LLM backend (rmd-llm), which is not yet implemented");
+    eprintln!("error: '{cmd}' is not yet implemented (rmd-mcp wiring pending)");
     std::process::exit(2);
 }

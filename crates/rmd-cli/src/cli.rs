@@ -61,15 +61,14 @@ pub enum Command {
     /// Clear caches, drop inactive docs, vacuum the database.
     Cleanup,
 
-    // ───────── LLM-dependent (stubbed) ─────────
-    /// Full-text BM25 search. **Requires rmd-llm (not yet implemented).**
-    Search(StubArgs),
+    /// Full-text BM25 search (no LLM required).
+    Search(SearchArgs),
 
-    /// Vector similarity search. **Requires rmd-llm (not yet implemented).**
-    Vsearch(StubArgs),
+    /// Vector similarity search with automatic query expansion.
+    Vsearch(VsearchArgs),
 
-    /// Hybrid search with LLM expansion + reranking. **Requires rmd-llm (not yet implemented).**
-    Query(StubArgs),
+    /// Hybrid search: BM25 + vector + LLM expansion + reranking.
+    Query(QueryArgs),
 
     /// Generate/refresh vector embeddings for indexed documents.
     Embed(EmbedArgs),
@@ -219,15 +218,83 @@ pub struct LsArgs {
 }
 
 // ============================================================================
-// LLM stubs (defined for --help completeness only)
+// search / vsearch / query
 // ============================================================================
 
+/// Flags common to `search`, `vsearch`, and `query`.
+#[derive(Debug, Args, Clone)]
+pub struct SearchFlags {
+    /// Output as JSON (otherwise pretty-printed CLI).
+    #[arg(long)]
+    pub json: bool,
+    /// Restrict to a single collection. Pass at most once.
+    #[arg(short = 'c', long)]
+    pub collection: Vec<String>,
+    /// Limit results.
+    #[arg(short = 'n', long)]
+    pub limit: Option<usize>,
+    /// Effectively no limit (set to 500/100000 internally depending on subcommand).
+    #[arg(long)]
+    pub all: bool,
+    /// Minimum normalized score (0.0-1.0). Defaults: search=0.0, vsearch=0.3, query=0.0.
+    #[arg(long = "min-score")]
+    pub min_score: Option<f64>,
+    /// Show full body instead of a snippet.
+    #[arg(long)]
+    pub full: bool,
+    /// Prefix snippet lines with 1-indexed line numbers.
+    #[arg(long = "line-numbers")]
+    pub line_numbers: bool,
+}
+
 #[derive(Debug, Args)]
-pub struct StubArgs {
+pub struct SearchArgs {
+    #[command(flatten)]
+    pub flags: SearchFlags,
     /// Query string (positional, joined by spaces).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub query: Vec<String>,
 }
+
+#[derive(Debug, Args)]
+pub struct VsearchArgs {
+    #[command(flatten)]
+    pub flags: SearchFlags,
+    /// Domain intent (steers the vector / hyde expansion).
+    #[arg(long)]
+    pub intent: Option<String>,
+    /// Query string (positional, joined by spaces).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub query: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct QueryArgs {
+    #[command(flatten)]
+    pub flags: SearchFlags,
+    /// Domain intent.
+    #[arg(long)]
+    pub intent: Option<String>,
+    /// Number of candidates passed to the LLM reranker.
+    #[arg(short = 'C', long = "candidate-limit")]
+    pub candidate_limit: Option<usize>,
+    /// Skip LLM reranking and return RRF-blended ranks.
+    #[arg(long = "no-rerank")]
+    pub no_rerank: bool,
+    /// Include score trace in output (JSON only; CLI shows a brief summary).
+    #[arg(long)]
+    pub explain: bool,
+    /// Chunking strategy override (reuses the `embed` enum).
+    #[arg(long = "chunk-strategy", value_enum)]
+    pub chunk_strategy: Option<ChunkStrategyArg>,
+    /// Query string (positional, joined by spaces).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub query: Vec<String>,
+}
+
+// ============================================================================
+// embed / pull / mcp
+// ============================================================================
 
 #[derive(Debug, Args)]
 pub struct EmbedArgs {

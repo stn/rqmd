@@ -1,7 +1,7 @@
 //! `rmd` — command-line interface.
 //!
-//! Maps to qmd's `src/cli/qmd.ts` (3828 lines). PR1 of the LLM wiring adds
-//! `pull` and `embed`; `search`, `vsearch`, `query`, and `mcp` remain stubbed.
+//! Maps to qmd's `src/cli/qmd.ts` (3828 lines). PR1 wired `pull` + `embed`;
+//! PR2 wires `search` + `vsearch` + `query`. Only `mcp` remains stubbed.
 
 use anyhow::Result;
 use clap::Parser;
@@ -11,6 +11,7 @@ mod color;
 mod commands;
 mod format_helpers;
 mod output;
+mod search_view;
 mod state;
 
 use cli::{Cli, Command};
@@ -55,10 +56,10 @@ async fn run() -> Result<()> {
 
         Command::Pull(a) => commands::pull::run(a, &mut state, &palette).await,
         Command::Embed(a) => commands::embed::run(a, &mut state, &palette).await,
+        Command::Search(a) => commands::search::run(a, &mut state, &palette),
+        Command::Vsearch(a) => commands::vsearch::run(a, &mut state, &palette).await,
+        Command::Query(a) => commands::query::run(a, &mut state, &palette).await,
 
-        Command::Search(_) => commands::llm_stub::run("search"),
-        Command::Vsearch(_) => commands::llm_stub::run("vsearch"),
-        Command::Query(_) => commands::llm_stub::run("query"),
         Command::Mcp(_) => commands::llm_stub::run("mcp"),
     }
 }
