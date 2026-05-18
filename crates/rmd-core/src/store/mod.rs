@@ -18,6 +18,7 @@ pub mod chunking;
 pub mod context;
 pub mod docid;
 pub mod documents;
+pub mod embeddings;
 pub mod lookup;
 pub mod maintenance;
 pub mod path;
@@ -26,6 +27,7 @@ pub mod rrf;
 pub mod schema;
 pub mod search;
 pub mod snippet;
+pub mod status;
 pub mod store_config;
 pub mod virtual_path;
 
@@ -48,6 +50,12 @@ pub const CHUNK_WINDOW_CHARS: usize = CHUNK_WINDOW_TOKENS * 4;
 pub const STRONG_SIGNAL_MIN_SCORE: f64 = 0.85;
 pub const STRONG_SIGNAL_MIN_GAP: f64 = 0.15;
 pub const RERANK_CANDIDATE_LIMIT: usize = 40;
+
+/// Per-intent-term weight in best-chunk selection (TS `INTENT_WEIGHT_CHUNK`
+/// = 0.5; `store.ts:4051`). Query terms each contribute 1.0; intent terms
+/// each contribute 0.5. Kept in `rmd-core` so both `hybrid_query` and
+/// `structured_search` in `rmd-llm` share one source of truth.
+pub const INTENT_WEIGHT_CHUNK: f64 = 0.5;
 
 // ============================================================================
 // Errors
@@ -151,5 +159,77 @@ impl Store {
     /// Mutable variant for transactions / DDL.
     pub fn with_connection_mut<R>(&mut self, f: impl FnOnce(&mut Connection) -> R) -> R {
         f(&mut self.conn)
+    }
+
+    // ========================================================================
+    // Embedding-side SQL convenience wrappers (Layer A).
+    //
+    // These are thin pass-throughs to the corresponding free functions in
+    // `embeddings` / `status`. Orchestration code in `rmd-llm::store_ops`
+    // typically goes through `with_connection` / `with_connection_mut` to
+    // call the free functions directly (cheaper inside a hot loop), but the
+    // method form is offered for CLI / scripting use.
+    // ========================================================================
+
+    /// Create `vectors_vec` for the given dimension count (or validate an
+    /// existing table matches). Returns `Error::InvalidQuery` if the store
+    /// was opened without `sqlite-vec` support, or if an existing table has
+    /// a different dimension count. See [`embeddings::ensure_vec_table`].
+    pub fn ensure_vec_table(&mut self, dimensions: usize) -> Result<()> {
+        if !self.vec_available {
+            return Err(Error::InvalidQuery(
+                "vector operations require sqlite-vec".into(),
+            ));
+        }
+        embeddings::ensure_vec_table(&self.conn, dimensions)
+    }
+
+    /// Insert one embedding. See [`embeddings::insert_embedding`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_embedding(
+        &mut self,
+        hash: &str,
+        seq: i64,
+        pos: i64,
+        embedding: &[f32],
+        model: &str,
+        embedded_at: &str,
+        total_chunks: i64,
+    ) -> Result<()> {
+        embeddings::insert_embedding(
+            &self.conn,
+            hash,
+            seq,
+            pos,
+            embedding,
+            model,
+            embedded_at,
+            total_chunks,
+        )
+    }
+
+    /// Clear embeddings globally (`collection = None`) or scoped.
+    /// See [`embeddings::clear_all_embeddings`].
+    pub fn clear_all_embeddings(&mut self, collection: Option<&str>) -> Result<()> {
+        embeddings::clear_all_embeddings(&self.conn, collection)
+    }
+
+    /// See [`status::get_status`].
+    pub fn get_status(&self, model: &str) -> Result<status::IndexStatus> {
+        status::get_status(&self.conn, model)
+    }
+
+    /// See [`status::get_index_health`].
+    pub fn get_index_health(&self, model: &str) -> Result<status::IndexHealthInfo> {
+        status::get_index_health(&self.conn, model)
+    }
+
+    /// See [`embeddings::get_hashes_needing_embedding`].
+    pub fn get_hashes_needing_embedding(
+        &self,
+        collection: Option<&str>,
+        model: &str,
+    ) -> Result<i64> {
+        embeddings::get_hashes_needing_embedding(&self.conn, collection, model)
     }
 }

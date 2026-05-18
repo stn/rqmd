@@ -12,11 +12,19 @@ use super::path::now_rfc3339;
 use super::Result;
 
 /// Compute the cache key for an `(url, body)` pair. Hex-encoded SHA-256.
-/// Mirrors `getCacheKey` (`store.ts:2024–…`).
+/// Mirrors `getCacheKey` (`store.ts:2024–2029`) **byte for byte** — `url`
+/// and `body` are concatenated with no separator, matching the TS
+/// `hash.update(url); hash.update(JSON.stringify(body))` pattern. Callers
+/// in `rmd-llm::store_ops` are responsible for serialising their `body`
+/// argument identically to `JSON.stringify` (use `serde_json` with the
+/// `preserve_order` feature so object keys preserve insertion order).
+///
+/// Inter-tool compatibility with `qmd`'s on-disk `llm_cache` table depends
+/// on the byte equality of this digest. Pinned by the unit tests below and
+/// by `rmd-llm`'s `cache_keys` tests.
 pub fn get_cache_key(url: &str, body: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());
-    hasher.update(b"\0");
     hasher.update(body.as_bytes());
     let digest = hasher.finalize();
     let mut s = String::with_capacity(64);
@@ -95,5 +103,35 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(get_cache_key("u", "b"), get_cache_key("u2", "b"));
         assert_ne!(get_cache_key("u", "b"), get_cache_key("u", "b2"));
+    }
+
+    /// Pins the wire-level cache key bytes to match the TypeScript
+    /// `getCacheKey(url, body)` (`tobi/qmd/src/store.ts:2024-2029`). Hashes
+    /// were generated externally:
+    ///   `sha256("expandQuery" || JSON.stringify({query:"hi",model:"m"}))`
+    /// Required for cache round-trips between qmd (TS) and rmd (Rust) over
+    /// the same `llm_cache` table.
+    #[test]
+    fn cache_keys_match_ts_known_inputs() {
+        assert_eq!(
+            get_cache_key("expandQuery", r#"{"query":"hi","model":"m"}"#),
+            "76c821b4ed2aba79b3bd1757beefaee75160d41b337811f51ce1a6e575a63bb4"
+        );
+        // Japanese — exercises UTF-8 bytes in the body.
+        assert_eq!(
+            get_cache_key("expandQuery", r#"{"query":"こんにちは","model":"m"}"#),
+            "20f8913e9743bfb22d0f8e6122ff1ba21182bec1a055773137badde29dc902ef"
+        );
+        // Rerank with intent-prepended query. TS `JSON.stringify` escapes
+        // the actual newlines in `"intent\n\nq"` (where `\n` is U+000A) to
+        // the two-character sequence `\n` in the JSON output, so the body
+        // bytes contain literal backslash-n pairs.
+        assert_eq!(
+            get_cache_key(
+                "rerank",
+                "{\"query\":\"intent\\n\\nq\",\"model\":\"m\",\"chunk\":\"text\"}"
+            ),
+            "bb87120a9fcce50bf338d64b7316648275c162bf8bc3d89756620ef8bb7a3ce5"
+        );
     }
 }

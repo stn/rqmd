@@ -336,6 +336,46 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
+/// Inverse of [`civil_from_days`]. Returns days since 1970-01-01 (negative
+/// before the epoch). Public for status.rs's `days_stale` calculation.
+fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y as i64 - 1 } else { y as i64 };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400; // [0, 399]
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) as i64 + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Parse an ISO-8601/RFC-3339 timestamp prefix (`YYYY-MM-DD...`) and return
+/// days since 1970-01-01. Returns `None` if the first 10 bytes do not look
+/// like a valid date. The remainder of the string (time component, timezone)
+/// is ignored — sufficient for whole-day staleness arithmetic.
+pub fn parse_rfc3339_to_epoch_days(s: &str) -> Option<i64> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let year: i32 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
+    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
+    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some(days_from_civil(year, month, day))
+}
+
+/// Days between `now` and `then_rfc3339`. Negative if `then` is in the future.
+pub fn days_since_rfc3339(then_rfc3339: &str) -> Option<i64> {
+    let then_days = parse_rfc3339_to_epoch_days(then_rfc3339)?;
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let now_days = now_secs.div_euclid(86_400);
+    Some(now_days - then_days)
+}
+
 // ============================================================================
 // Unit tests
 // ============================================================================
@@ -389,5 +429,36 @@ mod tests {
             format_rfc3339_utc(1_709_210_096, 789),
             "2024-02-29T12:34:56.789Z"
         );
+    }
+
+    #[test]
+    fn days_from_civil_round_trips() {
+        // Epoch.
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        // 2024-01-01 is 19_723 days after epoch.
+        assert_eq!(days_from_civil(2024, 1, 1), 19_723);
+        // Leap day.
+        assert_eq!(days_from_civil(2024, 2, 29), 19_782);
+        // Round-trip against civil_from_days.
+        for d in [0_i64, 1, 100, 365, 366, 19_723, 19_782, 50_000] {
+            let (y, m, day) = civil_from_days(d);
+            assert_eq!(days_from_civil(y, m, day), d);
+        }
+    }
+
+    #[test]
+    fn parse_rfc3339_to_epoch_days_handles_prefix() {
+        assert_eq!(parse_rfc3339_to_epoch_days("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(
+            parse_rfc3339_to_epoch_days("2024-01-01T12:34:56.789Z"),
+            Some(19_723)
+        );
+        assert_eq!(parse_rfc3339_to_epoch_days("2024-02-29"), Some(19_782));
+        // Garbage.
+        assert_eq!(parse_rfc3339_to_epoch_days("not-a-date"), None);
+        assert_eq!(parse_rfc3339_to_epoch_days(""), None);
+        // Out-of-range month/day.
+        assert_eq!(parse_rfc3339_to_epoch_days("2024-13-01"), None);
+        assert_eq!(parse_rfc3339_to_epoch_days("2024-00-01"), None);
     }
 }

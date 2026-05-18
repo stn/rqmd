@@ -157,6 +157,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
+name = "bytemuck"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1622,6 +1628,7 @@ dependencies = [
 name = "rmd-core"
 version = "0.0.1"
 dependencies = [
+ "bytemuck",
  "globset",
  "ignore",
  "indexmap",
@@ -1654,6 +1661,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1864,6 +1872,7 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

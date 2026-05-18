@@ -31,11 +31,13 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use async_trait::async_trait;
+
 use crate::error::{Error, Result};
 use crate::llama_cpp::LlamaCpp;
 use crate::traits::{LlamaToken, Llm};
 use crate::types::{
-    EmbedOptions, EmbeddingResult, ExpandQueryOptions, GenerateOptions, GenerateResult,
+    EmbedOptions, EmbeddingResult, ExpandQueryOptions, GenerateOptions, GenerateResult, ModelInfo,
     Queryable, RerankDocument, RerankOptions, RerankResult,
 };
 
@@ -194,6 +196,72 @@ impl Drop for LlmSession {
             self.abort.cancel();
         }
     }
+}
+
+/// `LlmSession` as an `Llm` trait object. Lets `store_ops` orchestrators
+/// accept `Arc<dyn Llm>` for both bare `Arc<LlamaCpp>` and
+/// `Arc<LlmSession>` callers. Method bodies delegate to the inherent
+/// methods, which add session-validity guards on top of the underlying
+/// `LlamaCpp`.
+///
+/// `dispose` is a deliberate no-op: an `Arc<LlmSession>` does not own
+/// the `LlamaCpp` outright (other handles may exist), and the session's
+/// `Drop` already cancels its abort token. Tearing down the underlying
+/// `LlamaCpp` from a trait-object dispose call would be a footgun.
+/// `model_exists` delegates to the wrapped `LlamaCpp`.
+#[async_trait]
+impl Llm for LlmSession {
+    async fn embed(&self, text: &str, opts: EmbedOptions) -> Result<Option<EmbeddingResult>> {
+        Self::embed(self, text, opts).await
+    }
+
+    async fn embed_batch(
+        &self,
+        texts: &[String],
+        opts: EmbedOptions,
+    ) -> Result<Vec<Option<EmbeddingResult>>> {
+        Self::embed_batch(self, texts, opts).await
+    }
+
+    async fn generate(
+        &self,
+        prompt: &str,
+        opts: GenerateOptions,
+    ) -> Result<Option<GenerateResult>> {
+        Self::generate(self, prompt, opts).await
+    }
+
+    async fn model_exists(&self, model: &str) -> Result<ModelInfo> {
+        self.llm.model_exists(model).await
+    }
+
+    async fn expand_query(
+        &self,
+        query: &str,
+        opts: ExpandQueryOptions,
+    ) -> Result<Vec<Queryable>> {
+        Self::expand_query(self, query, opts).await
+    }
+
+    async fn rerank(
+        &self,
+        query: &str,
+        docs: &[RerankDocument],
+        opts: RerankOptions,
+    ) -> Result<RerankResult> {
+        Self::rerank(self, query, docs, opts).await
+    }
+
+    async fn tokenize(&self, text: &str) -> Result<Vec<LlamaToken>> {
+        Self::tokenize(self, text).await
+    }
+
+    async fn detokenize(&self, tokens: &[LlamaToken]) -> Result<String> {
+        Self::detokenize(self, tokens).await
+    }
+
+    /// No-op: see type-level docs.
+    async fn dispose(&self) {}
 }
 
 /// Run `f` with a scoped [`LlmSession`]. The session is automatically

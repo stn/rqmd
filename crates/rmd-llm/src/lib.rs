@@ -36,6 +36,12 @@ pub mod singleton;
 pub mod traits;
 pub mod worker;
 
+// Store-orchestrating operations (Layer B — the LLM-using half of
+// `qmd/store.ts`). Free functions that combine `rmd-core::store` with the
+// `Llm` trait. Re-exported below so callers don't need to know the
+// submodule layout.
+pub mod store_ops;
+
 // Convenience re-exports of the most commonly used items.
 pub use error::{Error, Result};
 pub use llama_cpp::{LlamaCpp, LlamaCppConfig};
@@ -46,4 +52,13 @@ pub use types::{
     EmbedOptions, EmbeddingResult, ExpandQueryOptions, GenerateOptions, GenerateResult, ModelInfo,
     ModelResolutionConfig, PullOptions, PullResult, QueryType, Queryable, RerankDocument,
     RerankDocumentResult, RerankOptions, RerankResult, TokenLogProb,
+};
+
+pub use store_ops::{
+    chunk_document_by_tokens, expand_query, generate_embeddings, hybrid_query, rerank,
+    search_vec, structured_search, vector_search_query, EmbedOptions as EmbedStoreOptions,
+    EmbedProgress, EmbedResult, Error as StoreOpsError, ExpandedQuery, ExpandedQueryType,
+    HashForEmbedding, HybridQueryOptions, HybridQueryResult, IndexHealthInfo, IndexStatus,
+    RerankCandidate, RerankScore, Result as StoreOpsResult, SearchHooks, StructuredSearchOptions,
+    TokenChunk, VectorSearchOptions, VectorSearchResult,
 };
