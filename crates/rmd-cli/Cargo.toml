@@ -18,3 +18,8 @@ rmd-mcp    = { workspace = true }
 clap       = { version = "4", features = ["derive", "wrap_help"] }
 anyhow     = "1"
 serde_json = "1"
+# Async runtime: `rmd-llm` exposes async fns (hybrid_query, generate_embeddings, etc.),
+# so `main` runs under `#[tokio::main]`. Sync commands stay sync inside the async
+# dispatcher (no `.await`). `time` feature is needed by tokio internals used during
+# pull (spawn_blocking) and embed (session timers).
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

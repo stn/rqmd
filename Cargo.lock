@@ -1622,6 +1622,7 @@ dependencies = [
  "rmd-llm",
  "rmd-mcp",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

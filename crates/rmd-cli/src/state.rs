@@ -4,21 +4,34 @@
 //! `--index` / local-config resolution in `src/cli/qmd.ts` (lines 119–188).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use rmd_core::collections::{find_local_config_path, local_db_path, Config};
 use rmd_core::store::path::{default_db_path, pwd};
 use rmd_core::store::store_config::sync_config_to_db;
 use rmd_core::Store;
+use rmd_llm::config::{resolve_embed_model, resolve_generate_model, resolve_rerank_model};
+use rmd_llm::{LlamaCpp, LlamaCppConfig, ModelResolutionConfig};
 
-/// Holds the CLI's index selection plus the lazily-opened [`Store`] and
-/// [`Config`]. One per `rmd` invocation.
+/// Holds the CLI's index selection plus the lazily-opened [`Store`],
+/// [`Config`], and [`LlamaCpp`] handle. One per `rmd` invocation.
 pub struct IndexState {
     index_name: String,
     db_path_override: Option<PathBuf>,
     config_path_override: Option<PathBuf>,
     store: Option<Store>,
     config: Option<Config>,
+    llama: Option<Arc<LlamaCpp>>,
+}
+
+/// The three model URIs the CLI cares about, fully resolved against env vars
+/// and YAML `models:` overrides.
+#[derive(Debug, Clone)]
+pub struct ResolvedModelUris {
+    pub embed: String,
+    pub generate: String,
+    pub rerank: String,
 }
 
 impl IndexState {
@@ -37,6 +50,7 @@ impl IndexState {
             config_path_override,
             store: None,
             config: None,
+            llama: None,
         }
     }
 
@@ -72,6 +86,68 @@ impl IndexState {
             self.config = Some(cfg);
         }
         Ok(self.config.as_mut().expect("just inserted"))
+    }
+
+    /// Immutable accessor; assumes [`Self::config_mut`] has already been called
+    /// to populate the lazy cache. LLM commands trigger that on entry.
+    pub fn config(&self) -> Result<&Config> {
+        self.config
+            .as_ref()
+            .ok_or_else(|| anyhow!("config not loaded; call config_mut() first"))
+    }
+
+    /// Translate the YAML `models:` section into a [`ModelResolutionConfig`].
+    /// Missing fields stay `None`; resolution against env vars and crate
+    /// defaults happens inside [`LlamaCpp::new`].
+    pub fn models_config(&self) -> Result<ModelResolutionConfig> {
+        let data = self.config()?.data();
+        Ok(ModelResolutionConfig {
+            embed: data.models.as_ref().and_then(|m| m.embed.clone()),
+            generate: data.models.as_ref().and_then(|m| m.generate.clone()),
+            rerank: data.models.as_ref().and_then(|m| m.rerank.clone()),
+        })
+    }
+
+    /// Lazily construct (and cache) an [`LlamaCpp`] handle. Subsequent calls
+    /// return the same `Arc`, so multiple LLM commands invoked in the same
+    /// process share one worker pool / model cache.
+    ///
+    /// Model URI resolution (env > YAML > crate default) is delegated to
+    /// `LlamaCpp::new`; `ci_mode` / `parallelism` etc. come from
+    /// `LlamaCppConfig::from_env`.
+    ///
+    /// Note: only the write path (`embed`) currently threads the YAML
+    /// `models:` section through; the read path (`hybrid_query` /
+    /// `vector_search_query`) calls `resolve_*_model(None)` internally and
+    /// sees only env vars and defaults. See the plan's Known Limitations.
+    pub fn llama_cpp(&mut self) -> Result<Arc<LlamaCpp>> {
+        if self.llama.is_none() {
+            // Force the lazy YAML load before we read it.
+            self.config_mut()?;
+            let model_cfg = self.models_config()?;
+            let llama = LlamaCppConfig {
+                embed_model: model_cfg.embed,
+                generate_model: model_cfg.generate,
+                rerank_model: model_cfg.rerank,
+                ..LlamaCppConfig::from_env()
+            };
+            self.llama = Some(Arc::new(LlamaCpp::new(llama)));
+        }
+        Ok(self.llama.as_ref().expect("just inserted").clone())
+    }
+
+    /// Fully-resolved model URIs (env > YAML > crate default). The single
+    /// source of truth shared by `pull` (which feeds them to `pull_models`)
+    /// and any future caller that needs the URIs without instantiating an
+    /// `LlamaCpp`.
+    pub fn resolved_model_uris(&mut self) -> Result<ResolvedModelUris> {
+        self.config_mut()?;
+        let cfg = self.models_config()?;
+        Ok(ResolvedModelUris {
+            embed: resolve_embed_model(Some(&cfg)),
+            generate: resolve_generate_model(Some(&cfg)),
+            rerank: resolve_rerank_model(Some(&cfg)),
+        })
     }
 
     /// Re-load the YAML and re-sync it into the SQLite `store_collections` /

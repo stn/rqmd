@@ -2,7 +2,9 @@
 //!
 //! Maps to qmd's `parseArgs` block in `src/cli/qmd.ts` (lines 2632–2748).
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+use rmd_core::store::chunking::ChunkStrategy;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -69,10 +71,10 @@ pub enum Command {
     /// Hybrid search with LLM expansion + reranking. **Requires rmd-llm (not yet implemented).**
     Query(StubArgs),
 
-    /// Generate/refresh vector embeddings. **Requires rmd-llm (not yet implemented).**
+    /// Generate/refresh vector embeddings for indexed documents.
     Embed(EmbedArgs),
 
-    /// Pull configured LLM models. **Requires rmd-llm (not yet implemented).**
+    /// Download the configured LLM models from HuggingFace.
     Pull(PullArgs),
 
     /// Start the MCP server. **Requires rmd-mcp + rmd-llm (not yet implemented).**
@@ -229,20 +231,26 @@ pub struct StubArgs {
 
 #[derive(Debug, Args)]
 pub struct EmbedArgs {
+    /// Drop existing embeddings and rebuild from scratch.
     #[arg(short = 'f', long)]
     pub force: bool,
+    /// Documents per embed batch (default: crate default).
     #[arg(long = "max-docs-per-batch")]
     pub max_docs_per_batch: Option<usize>,
+    /// Total payload cap per batch in megabytes (default: crate default).
     #[arg(long = "max-batch-mb")]
     pub max_batch_mb: Option<usize>,
-    #[arg(long = "chunk-strategy")]
-    pub chunk_strategy: Option<String>,
+    /// Chunking strategy.
+    #[arg(long = "chunk-strategy", value_enum)]
+    pub chunk_strategy: Option<ChunkStrategyArg>,
+    /// Restrict to a single collection. Pass at most once.
     #[arg(short = 'c', long = "collection")]
     pub collection: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct PullArgs {
+    /// Re-download even if a cached copy exists (ETag-checked).
     #[arg(long)]
     pub refresh: bool,
 }
@@ -260,6 +268,24 @@ pub struct McpArgs {
 // ============================================================================
 // shared
 // ============================================================================
+
+/// CLI-side mirror of [`ChunkStrategy`] so we can derive `ValueEnum` (the
+/// upstream enum lives in `rmd-core` which deliberately doesn't depend on
+/// `clap`).
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ChunkStrategyArg {
+    Auto,
+    Regex,
+}
+
+impl From<ChunkStrategyArg> for ChunkStrategy {
+    fn from(v: ChunkStrategyArg) -> Self {
+        match v {
+            ChunkStrategyArg::Auto => ChunkStrategy::Auto,
+            ChunkStrategyArg::Regex => ChunkStrategy::Regex,
+        }
+    }
+}
 
 #[derive(Debug, Args, Clone, Copy, Default)]
 pub struct FormatFlags {

@@ -1,9 +1,7 @@
 //! `rmd` — command-line interface.
 //!
-//! Maps to qmd's `src/cli/qmd.ts` (3828 lines). This pass ports the non-LLM
-//! commands; `search`, `vsearch`, `query`, `embed`, `pull`, and `mcp` are
-//! parsed for `--help` completeness but their handlers exit with a clear
-//! "requires rmd-llm" message.
+//! Maps to qmd's `src/cli/qmd.ts` (3828 lines). PR1 of the LLM wiring adds
+//! `pull` and `embed`; `search`, `vsearch`, `query`, and `mcp` remain stubbed.
 
 use anyhow::Result;
 use clap::Parser;
@@ -18,14 +16,18 @@ mod state;
 use cli::{Cli, Command};
 use state::IndexState;
 
-fn main() {
-    if let Err(err) = run() {
+// `rmd-llm` exposes async fns; `#[tokio::main]` provides the runtime.
+// Sync commands keep their original signature and are simply called without
+// `.await` from inside this async dispatcher.
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+    if let Err(err) = run().await {
         eprintln!("error: {err:#}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     let args = Cli::parse();
 
     // Flip to production mode so default_db_path() returns a real path
@@ -33,7 +35,8 @@ fn run() -> Result<()> {
     rmd_core::store::path::enable_production_mode();
 
     if args.no_gpu {
-        // SAFETY: we are still single-threaded at this point.
+        // SAFETY: single-threaded at this point — tokio worker threads only
+        // come into play once we hit an async LLM call below.
         unsafe { std::env::set_var("QMD_FORCE_CPU", "1") };
     }
 
@@ -50,11 +53,12 @@ fn run() -> Result<()> {
         Command::Update => commands::update::run(&mut state, &palette),
         Command::Cleanup => commands::cleanup::run(&mut state, &palette),
 
+        Command::Pull(a) => commands::pull::run(a, &mut state, &palette).await,
+        Command::Embed(a) => commands::embed::run(a, &mut state, &palette).await,
+
         Command::Search(_) => commands::llm_stub::run("search"),
         Command::Vsearch(_) => commands::llm_stub::run("vsearch"),
         Command::Query(_) => commands::llm_stub::run("query"),
-        Command::Embed(_) => commands::llm_stub::run("embed"),
-        Command::Pull(_) => commands::llm_stub::run("pull"),
         Command::Mcp(_) => commands::llm_stub::run("mcp"),
     }
 }
