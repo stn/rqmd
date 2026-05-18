@@ -9,3 +9,18 @@ repository.workspace = true
 
 [dependencies]
 rmd-core = { workspace = true }
+
+[dev-dependencies]
+# Spike-only — see crates/rmd-llm/examples/*. These dependencies do not affect
+# the production build of rmd-llm (which is currently empty besides VERSION).
+# Pinned to the same versions the upstream llama-cpp-rs workspace uses.
+#
+# GPU acceleration is intentionally not wired through rmd-llm features here:
+# Cargo features pointing at dev-dependencies are brittle, and the spikes only
+# need to prove that the llama-cpp-2 API compiles and produces a vector — CPU
+# is sufficient. To run a spike with a GPU backend, edit this file locally to
+# add the corresponding feature (e.g. `features = ["metal"]` on llama-cpp-2).
+llama-cpp-2 = "0.1"
+hf-hub      = "0.4"
+anyhow      = "1"
+encoding_rs = "0.8"
