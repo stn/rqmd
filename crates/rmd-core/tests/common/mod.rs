@@ -56,3 +56,5 @@ impl Drop for EnvGuard {
 
 /// The env vars `paths::rmd_homedir()` and `paths::config_dir()` consult.
 pub const PATH_ENV_KEYS: &[&str] = &["HOME", "USERPROFILE", "RMD_CONFIG_DIR", "XDG_CONFIG_HOME"];
+
+pub mod mock_llm;

@@ -9,12 +9,11 @@ local LLM re-ranking.
 
 ## Workspace layout
 
-| Crate       | Role                                                       | Maps to (qmd)                              |
-|-------------|------------------------------------------------------------|--------------------------------------------|
-| `rmd-core`  | Search engine core — store, db, chunking, collections, AST | `src/store.ts`, `src/db.ts`, `src/ast.ts`  |
-| `rmd-llm`   | GGUF model integration — embeddings, rerank, query expand  | `src/llm.ts`                               |
-| `rmd-mcp`   | MCP server (library, launched via `rmd mcp`)               | `src/mcp/server.ts`                        |
-| `rmd-cli`   | CLI binary (`rmd`) — subcommands `search`, `mcp`, etc.     | `src/cli/qmd.ts`                           |
+| Crate       | Role                                                                       | Maps to (qmd)                                           |
+|-------------|----------------------------------------------------------------------------|---------------------------------------------------------|
+| `rmd-core`  | Search engine core — store, db, chunking, collections, AST, LLM, store-ops | `src/store.ts`, `src/db.ts`, `src/ast.ts`, `src/llm.ts` |
+| `rmd-mcp`   | MCP server (library, launched via `rmd mcp`)                               | `src/mcp/server.ts`                                     |
+| `rmd-cli`   | CLI binary (`rmd`) — subcommands `search`, `mcp`, etc.                     | `src/cli/qmd.ts`                                        |
 
 ## Build
 

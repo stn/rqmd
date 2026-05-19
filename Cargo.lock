@@ -1619,7 +1619,6 @@ dependencies = [
  "anyhow",
  "clap",
  "rmd-core",
- "rmd-llm",
  "rmd-mcp",
  "serde",
  "serde_json",
@@ -1630,10 +1629,18 @@ dependencies = [
 name = "rmd-core"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
  "bytemuck",
+ "dirs 5.0.1",
+ "encoding_rs",
+ "futures",
  "globset",
+ "hf-hub",
  "ignore",
  "indexmap",
+ "llama-cpp-2",
  "regex",
  "rusqlite",
  "serde",
@@ -1645,6 +1652,9 @@ dependencies = [
  "streaming-iterator",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-javascript",
@@ -1654,36 +1664,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmd-llm"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "async-trait",
- "dirs 5.0.1",
- "encoding_rs",
- "futures",
- "hf-hub",
- "llama-cpp-2",
- "regex",
- "rmd-core",
- "serde",
- "serde_json",
- "serial_test",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "rmd-mcp"
 version = "0.0.1"
 dependencies = [
  "rmd-core",
- "rmd-llm",
 ]
 
 [[package]]

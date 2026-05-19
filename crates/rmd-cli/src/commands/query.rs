@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use rmd_core::Store;
-use rmd_llm::store_ops::{
+use rmd_core::store_ops::{
     hybrid_query, ExpandedQuery, HybridQueryOptions, HybridQueryResult, SearchHooks,
 };
-use rmd_llm::Llm;
+use rmd_core::llm::traits::Llm;
 use serde_json::json;
 
 use crate::cli::QueryArgs;

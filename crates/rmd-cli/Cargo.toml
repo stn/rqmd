@@ -13,14 +13,21 @@ path = "src/main.rs"
 
 [dependencies]
 rmd-core   = { workspace = true }
-rmd-llm    = { workspace = true }
 rmd-mcp    = { workspace = true }
 clap       = { version = "4", features = ["derive", "wrap_help"] }
 anyhow     = "1"
 serde      = { workspace = true }
 serde_json = "1"
-# Async runtime: `rmd-llm` exposes async fns (hybrid_query, generate_embeddings, etc.),
-# so `main` runs under `#[tokio::main]`. Sync commands stay sync inside the async
-# dispatcher (no `.await`). `time` feature is needed by tokio internals used during
-# pull (spawn_blocking) and embed (session timers).
+# Async runtime: `rmd_core::llm` and `rmd_core::store_ops` expose async fns
+# (hybrid_query, generate_embeddings, etc.), so `main` runs under
+# `#[tokio::main]`. Sync commands stay sync inside the async dispatcher (no
+# `.await`). `time` feature is needed by tokio internals used during pull
+# (spawn_blocking) and embed (session timers).
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[features]
+# GPU backends re-exported from rmd-core so users can invoke `cargo build -p
+# rmd-cli --features metal` (etc.) without referencing the core crate name.
+metal  = ["rmd-core/metal"]
+cuda   = ["rmd-core/cuda"]
+vulkan = ["rmd-core/vulkan"]

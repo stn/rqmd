@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "crates/rmd-core",
-    "crates/rmd-llm",
     "crates/rmd-mcp",
     "crates/rmd-cli",
 ]
@@ -17,7 +16,6 @@ description = "Rust port of tobi/qmd — on-device hybrid search for markdown"
 
 [workspace.dependencies]
 rmd-core = { path = "crates/rmd-core", version = "0.0.1" }
-rmd-llm  = { path = "crates/rmd-llm",  version = "0.0.1" }
 rmd-mcp  = { path = "crates/rmd-mcp",  version = "0.0.1" }
 
 serde      = { version = "1", features = ["derive"] }

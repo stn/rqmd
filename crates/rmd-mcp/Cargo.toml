@@ -9,4 +9,3 @@ repository.workspace = true
 
 [dependencies]
 rmd-core = { workspace = true }
-rmd-llm  = { workspace = true }

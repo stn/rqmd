@@ -10,7 +10,7 @@ use serde::Serialize;
 use rmd_core::store::rrf::{HybridQueryExplain, QueryType, RRFContributionTrace, RRFExplain};
 use rmd_core::store::search::{SearchResult, SearchSource};
 use rmd_core::store::snippet::{add_line_numbers, extract_snippet};
-use rmd_llm::store_ops::{HybridQueryResult, VectorSearchResult};
+use rmd_core::store_ops::{HybridQueryResult, VectorSearchResult};
 
 use crate::color::Palette;
 use crate::output::{escape_csv, escape_xml, OutputFormat};

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
-use rmd_llm::store_ops::{generate_embeddings, EmbedOptions, EmbedProgress};
+use rmd_core::store_ops::{generate_embeddings, EmbedOptions, EmbedProgress};
 
 use crate::cli::EmbedArgs;
 use crate::color::Palette;
@@ -45,7 +45,7 @@ pub async fn run(args: EmbedArgs, state: &mut IndexState, p: &Palette) -> Result
         Arc::new(move |ep: EmbedProgress| {
             // "Done" must include errors because failed chunks only
             // increment `errors`, never `chunks_embedded`
-            // (see rmd-llm/src/store_ops/embed.rs lines 293/300/345/367).
+            // (see rmd-core/src/store_ops/embed.rs lines 293/300/345/367).
             // Without this, partial-failure runs would drop the final
             // progress frame inside the 100 ms throttle window.
             let done = ep.total_chunks > 0

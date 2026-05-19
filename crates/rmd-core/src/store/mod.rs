@@ -2,12 +2,10 @@
 //!
 //! Port of the non-LLM half of `tobi/qmd`'s `src/store.ts`. Owns the SQLite
 //! schema, document CRUD, full-text search, virtual paths, chunking, RRF
-//! fusion, snippet extraction, and reindexing. LLM-using functions
+//! fusion, snippet extraction, and reindexing. The LLM-using counterparts
 //! (`expandQuery`, `rerank`, `generateEmbeddings`, `searchVec`, `hybridQuery`,
-//! `vectorSearch`, `structuredSearch`, `chunkDocumentByTokens`) and the
-//! embedding-side SQL ops are deferred to a future pass; the schema still
-//! creates the `content_vectors` and `vectors_vec` tables so that pass is
-//! purely additive.
+//! `vectorSearch`, `structuredSearch`, `chunkDocumentByTokens`) live in
+//! [`crate::store_ops`] and combine this module with [`crate::llm`].
 
 use std::path::{Path, PathBuf};
 
@@ -54,8 +52,8 @@ pub const RERANK_CANDIDATE_LIMIT: usize = 40;
 
 /// Per-intent-term weight in best-chunk selection (TS `INTENT_WEIGHT_CHUNK`
 /// = 0.5; `store.ts:4051`). Query terms each contribute 1.0; intent terms
-/// each contribute 0.5. Kept in `rmd-core` so both `hybrid_query` and
-/// `structured_search` in `rmd-llm` share one source of truth.
+/// each contribute 0.5. Kept in [`crate::store`] so both `hybrid_query` and
+/// `structured_search` in [`crate::store_ops`] share one source of truth.
 pub const INTENT_WEIGHT_CHUNK: f64 = 0.5;
 
 // ============================================================================
@@ -151,8 +149,9 @@ impl Store {
     }
 
     /// Borrow the underlying connection. Discouraged in favour of typed
-    /// methods on `Store`; useful while `rmd-llm` does not yet have its own
-    /// extension points on `Store`.
+    /// methods on `Store`; useful when downstream callers (e.g.
+    /// [`crate::store_ops`]) need direct SQLite access without going through
+    /// the wrapper.
     pub fn with_connection<R>(&self, f: impl FnOnce(&Connection) -> R) -> R {
         f(&self.conn)
     }
@@ -166,7 +165,7 @@ impl Store {
     // Embedding-side SQL convenience wrappers (Layer A).
     //
     // These are thin pass-throughs to the corresponding free functions in
-    // `embeddings` / `status`. Orchestration code in `rmd-llm::store_ops`
+    // `embeddings` / `status`. Orchestration code in `crate::store_ops`
     // typically goes through `with_connection` / `with_connection_mut` to
     // call the free functions directly (cheaper inside a hot loop), but the
     // method form is offered for CLI / scripting use.

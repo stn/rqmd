@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use rmd_core::Store;
-use rmd_llm::store_ops::{
+use rmd_core::store_ops::{
     vector_search_query, ExpandedQuery, SearchHooks, VectorSearchOptions,
 };
-use rmd_llm::Llm;
+use rmd_core::llm::traits::Llm;
 
 use crate::cli::VsearchArgs;
 use crate::color::Palette;
@@ -63,7 +63,7 @@ pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Resu
 }
 
 /// `vector_search_query` only fires `on_expand`; other hooks would be ignored.
-/// See `crates/rmd-llm/src/store_ops/vector_search.rs:32-34`.
+/// See `crates/rmd-core/src/store_ops/vector_search.rs:32-34`.
 /// Verbose logging only in the human CLI mode — any machine-readable format
 /// runs silently so stderr stays clean.
 fn build_vsearch_hooks(fmt: OutputFormat) -> SearchHooks {

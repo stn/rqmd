@@ -2,11 +2,11 @@
 //!
 //! Maps to qmd's `pullModels` CLI handler (`src/cli/qmd.ts` lines 3569–3587)
 //! and `pullModels` in `src/llm.ts` (lines 377–435). ETag-based incremental
-//! download is handled by `rmd-llm::pull::pull_models`.
+//! download is handled by `rmd_core::llm::pull::pull_models`.
 
 use anyhow::{Context, Result};
-use rmd_llm::pull::pull_models;
-use rmd_llm::types::PullOptions;
+use rmd_core::llm::pull::pull_models;
+use rmd_core::llm::types::PullOptions;
 
 use crate::cli::PullArgs;
 use crate::color::Palette;
@@ -29,7 +29,7 @@ pub async fn run(args: PullArgs, state: &mut IndexState, p: &Palette) -> Result<
     //
     // We preserve the underlying error chain via `?` + `.context()` so that
     // `main.rs`'s `{err:#}` formatting can surface specific guidance like
-    // `Error::InvalidGguf { looks_like_html, .. }` from `rmd-llm/src/pull.rs`.
+    // `Error::InvalidGguf { looks_like_html, .. }` from `rmd-core/src/llm/pull.rs`.
     let results = tokio::task::spawn_blocking(move || pull_models(&models, &opts))
         .await
         .context("pull task panicked")?

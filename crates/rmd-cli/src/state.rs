@@ -11,8 +11,9 @@ use rmd_core::collections::{find_local_config_path, local_db_path, Config};
 use rmd_core::store::path::{default_db_path, pwd};
 use rmd_core::store::store_config::sync_config_to_db;
 use rmd_core::Store;
-use rmd_llm::config::{resolve_embed_model, resolve_generate_model, resolve_rerank_model};
-use rmd_llm::{LlamaCpp, LlamaCppConfig, ModelResolutionConfig};
+use rmd_core::llm::config::{resolve_embed_model, resolve_generate_model, resolve_rerank_model};
+use rmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
+use rmd_core::llm::types::ModelResolutionConfig;
 
 /// Holds the CLI's index selection plus the lazily-opened [`Store`],
 /// [`Config`], and [`LlamaCpp`] handle. One per `rmd` invocation.

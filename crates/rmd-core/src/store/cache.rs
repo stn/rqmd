@@ -15,13 +15,13 @@ use super::Result;
 /// Mirrors `getCacheKey` (`store.ts:2024–2029`) **byte for byte** — `url`
 /// and `body` are concatenated with no separator, matching the TS
 /// `hash.update(url); hash.update(JSON.stringify(body))` pattern. Callers
-/// in `rmd-llm::store_ops` are responsible for serialising their `body`
+/// in `rmd_core::store_ops` are responsible for serialising their `body`
 /// argument identically to `JSON.stringify` (use `serde_json` with the
 /// `preserve_order` feature so object keys preserve insertion order).
 ///
 /// Inter-tool compatibility with `qmd`'s on-disk `llm_cache` table depends
 /// on the byte equality of this digest. Pinned by the unit tests below and
-/// by `rmd-llm`'s `cache_keys` tests.
+/// by the `cache_keys` tests under `rmd_core::store_ops`.
 pub fn get_cache_key(url: &str, body: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());

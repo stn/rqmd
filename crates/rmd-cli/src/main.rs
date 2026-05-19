@@ -17,7 +17,7 @@ mod state;
 use cli::{Cli, Command};
 use state::IndexState;
 
-// `rmd-llm` exposes async fns; `#[tokio::main]` provides the runtime.
+// `rmd_core::llm` / `rmd_core::store_ops` expose async fns; `#[tokio::main]` provides the runtime.
 // Sync commands keep their original signature and are simply called without
 // `.await` from inside this async dispatcher.
 #[tokio::main(flavor = "multi_thread")]

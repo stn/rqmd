@@ -1,7 +1,7 @@
 //! `rmd status` — index + collection health summary.
 //!
-//! Maps to qmd's `qmd status` in `src/cli/qmd.ts` (lines 393–628), minus the
-//! AST / Models / Device sections (require rmd-llm).
+//! Maps to qmd's `qmd status` in `src/cli/qmd.ts` (lines 393–628). The AST /
+//! Models / Device sections are not yet printed by this command.
 
 use anyhow::Result;
 use rmd_core::store::context::list_collections;
@@ -139,7 +139,7 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
     }
 
     println!(
-        "\n{}Models / device probe requires rmd-llm (not yet ported).{}",
+        "\n{}Models / device probe not yet implemented in this CLI.{}",
         p.dim(),
         p.reset()
     );
