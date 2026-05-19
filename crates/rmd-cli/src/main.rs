@@ -44,7 +44,12 @@ async fn run() -> Result<()> {
     let palette = color::Palette::new(args.no_color);
     let mut state = IndexState::new(args.index.as_deref());
 
-    match args.command {
+    // Bind the dispatch result so we can dispose the LLM workers *after* the
+    // command completes (and the `&mut state` borrow inside each match arm
+    // ends), regardless of Ok/Err. `state.close(self)` consumes `self`, so it
+    // must come after the match. Panics still skip `close` — same as pre-PR
+    // behaviour; the OS reclaims worker threads on process exit.
+    let result: Result<()> = match args.command {
         Command::Collection(sub) => commands::collection::run(sub, &mut state, &palette),
         Command::Context(sub) => commands::context::run(sub, &mut state, &palette),
         Command::Get(a) => commands::get::run(a, &mut state, &palette),
@@ -61,5 +66,7 @@ async fn run() -> Result<()> {
         Command::Query(a) => commands::query::run(a, &mut state, &palette).await,
 
         Command::Mcp(_) => commands::llm_stub::run("mcp"),
-    }
+    };
+    state.close().await;
+    result
 }

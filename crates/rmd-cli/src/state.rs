@@ -1,4 +1,4 @@
-//! CLI lifecycle: lazy [`Store`] + [`Config`] managed by an [`IndexState`].
+//! CLI lifecycle: lazy [`Store`] + [`Config`] + [`LlamaCpp`] managed by an [`IndexState`].
 //!
 //! Maps to qmd's module-level `let store / getStore()` helpers and the
 //! `--index` / local-config resolution in `src/cli/qmd.ts` (lines 119–188).
@@ -13,7 +13,7 @@ use rmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rmd_core::llm::types::ModelResolutionConfig;
 use rmd_core::store::path::{default_db_path, pwd};
 use rmd_core::store::store_config::sync_config_to_db;
-use rmd_core::Store;
+use rmd_core::{Llm, Store};
 
 /// Holds the CLI's index selection plus the lazily-opened [`Store`],
 /// [`Config`], and [`LlamaCpp`] handle. One per `rmd` invocation.
@@ -82,7 +82,7 @@ impl IndexState {
 
     /// Immutable accessor; assumes [`Self::config_mut`] has already been called
     /// to populate the lazy cache. LLM commands trigger that on entry.
-    pub fn config(&self) -> Result<&Config> {
+    fn config(&self) -> Result<&Config> {
         self.config
             .as_ref()
             .ok_or_else(|| anyhow!("config not loaded; call config_mut() first"))
@@ -91,7 +91,7 @@ impl IndexState {
     /// Translate the YAML `models:` section into a [`ModelResolutionConfig`].
     /// Missing fields stay `None`; resolution against env vars and crate
     /// defaults happens inside [`LlamaCpp::new`].
-    pub fn models_config(&self) -> Result<ModelResolutionConfig> {
+    fn models_config(&self) -> Result<ModelResolutionConfig> {
         let data = self.config()?.data();
         Ok(ModelResolutionConfig {
             embed: data.models.as_ref().and_then(|m| m.embed.clone()),
@@ -148,5 +148,52 @@ impl IndexState {
         let store = self.store_mut()?;
         store.with_connection_mut(|conn| sync_config_to_db(conn, &config_snapshot))?;
         Ok(())
+    }
+
+    /// Tear down LLM workers if instantiated. Mostly cosmetic for a one-shot
+    /// CLI (the OS reclaims everything on exit), but matches the
+    /// [`LlamaCpp`] / SDK contract that callers MUST dispose before drop —
+    /// Rust has no async `Drop`. Called once from `main.rs::run` at end of
+    /// dispatch (Ok and Err paths both).
+    ///
+    /// Note: `dispose` is a method on the [`Llm`] trait, not an inherent
+    /// method on [`LlamaCpp`], so the trait must be in scope (see the
+    /// `use rmd_core::Llm` at the top of this file).
+    pub async fn close(self) {
+        if let Some(llama) = self.llama {
+            llama.dispose().await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn close_is_no_op_when_llama_not_constructed() {
+        // Lazy state with no LLM yet — close() must short-circuit cleanly.
+        let state = IndexState::new(None);
+        assert!(state.llama.is_none());
+        state.close().await;
+    }
+
+    #[tokio::test]
+    async fn close_disposes_llama_cpp() {
+        // Bypass YAML/db setup: inject a ci-mode LlamaCpp directly into
+        // `state.llama`. We keep an `Arc::clone` to observe `is_disposed()`
+        // after `close()` consumes `state`.
+        let llama = Arc::new(LlamaCpp::new(LlamaCppConfig {
+            ci_mode: true,
+            ..LlamaCppConfig::default()
+        }));
+        let observer = Arc::clone(&llama);
+
+        let mut state = IndexState::new(None);
+        state.llama = Some(llama);
+
+        assert!(!observer.is_disposed());
+        state.close().await;
+        assert!(observer.is_disposed());
     }
 }
