@@ -47,7 +47,7 @@ pub async fn chunk_document_by_tokens(
     max_tokens: Option<usize>,
     overlap_tokens: Option<usize>,
     window_tokens: Option<usize>,
-    _filepath: Option<&str>,
+    filepath: Option<&str>,
     strategy: ChunkStrategy,
     cancel: Option<&CancellationToken>,
 ) -> Result<Vec<TokenChunk>> {
@@ -61,6 +61,7 @@ pub async fn chunk_document_by_tokens(
     let initial = chunk_document(
         content,
         strategy,
+        filepath,
         Some(max_chars),
         Some(overlap_chars),
         Some(window_chars),
@@ -100,6 +101,7 @@ pub async fn chunk_document_by_tokens(
         let mut sub = chunk_document(
             &text,
             strategy,
+            filepath,
             Some(safe_max_chars),
             Some(next_overlap),
             Some(next_window),
@@ -113,7 +115,7 @@ pub async fn chunk_document_by_tokens(
         if unchanged {
             // Half-split fallback.
             let half = (text.len() / 2).max(1);
-            sub = chunk_document(&text, strategy, Some(half), Some(0), Some(0));
+            sub = chunk_document(&text, strategy, filepath, Some(half), Some(0), Some(0));
         }
         let still_unchanged = sub.len() <= 1
             || sub

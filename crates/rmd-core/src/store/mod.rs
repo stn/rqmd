@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::{self, Connection};
 
+pub mod ast;
 pub mod cache;
 pub mod chunking;
 pub mod context;

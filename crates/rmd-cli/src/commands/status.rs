@@ -128,6 +128,16 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         }
     }
 
+    let ast_status = rmd_core::get_ast_status();
+    println!("\n{}AST Grammars{}", p.bold(), p.reset());
+    for lang in &ast_status.languages {
+        let mark = if lang.available { "✓" } else { "✗" };
+        println!("  {mark} {}", lang.language.as_str());
+        if let Some(err) = &lang.error {
+            println!("    {}{}{}", p.dim(), err, p.reset());
+        }
+    }
+
     println!(
         "\n{}Models / device probe requires rmd-llm (not yet ported).{}",
         p.dim(),

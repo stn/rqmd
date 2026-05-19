@@ -22,6 +22,10 @@ pub use collections::{
 // — the two cannot share the crate root.
 
 pub use store::Store;
+pub use store::ast::{
+    AstStatus, LangStatus, SupportedLanguage, detect_language, get_ast_break_points,
+    get_ast_status,
+};
 pub use store::chunking::{BreakKind, BreakPoint, Chunk, ChunkStrategy, CodeFenceRegion};
 pub use store::reindex::{ReindexProgress, ReindexResult};
 pub use store::rrf::{

@@ -45,6 +45,18 @@ pub enum BreakKind {
     List,
     NumList,
     Newline,
+    /// AST: class / interface / struct / trait / impl / mod boundary.
+    AstClass,
+    /// AST: function / method / export / decorated definition boundary.
+    AstFunc,
+    /// AST: type alias / enum boundary.
+    AstType,
+    /// AST: import / use declaration.
+    AstImport,
+    /// AST: capture name not in the known set — score-20 fallback so future
+    /// query edits don't silently get promoted to function priority.
+    /// Mirrors TS `SCORE_MAP[name] ?? 20` (`ast.ts:306`).
+    AstUnknown,
 }
 
 impl BreakKind {
@@ -61,6 +73,11 @@ impl BreakKind {
             BreakKind::Blank => 20,
             BreakKind::List | BreakKind::NumList => 5,
             BreakKind::Newline => 1,
+            BreakKind::AstClass => 100,
+            BreakKind::AstFunc => 90,
+            BreakKind::AstType => 80,
+            BreakKind::AstImport => 60,
+            BreakKind::AstUnknown => 20,
         }
     }
 }
@@ -245,6 +262,15 @@ pub fn find_best_cutoff(
     decay_factor: f64,
     code_fences: &[CodeFenceRegion],
 ) -> usize {
+    // Sorted-by-pos invariant: the `break` below is only safe if the input
+    // is non-decreasing in `pos`. `merge_break_points` produces this via
+    // BTreeMap iteration; this assertion fails fast in dev if a future
+    // change provides an unsorted slice.
+    debug_assert!(
+        break_points.windows(2).all(|w| w[0].pos <= w[1].pos),
+        "break_points must be sorted by pos"
+    );
+
     let window_start = target_char_pos.saturating_sub(window_chars);
     let mut best_score = -1.0_f64;
     let mut best_pos = target_char_pos;
@@ -362,14 +388,29 @@ fn snap_to_char_boundary(text: &str, mut idx: usize) -> usize {
 }
 
 /// Synchronous chunk entry point. Mirrors `chunkDocument` (`store.ts:2363–2380`).
+///
+/// `filepath` enables AST-aware chunking for supported code files (see
+/// [`super::ast::detect_language`]). Pass `None` for content with no
+/// associated path or when AST chunking is undesired; passing `Some` for a
+/// markdown or other unsupported extension is harmless — the AST step
+/// becomes a no-op.
 pub fn chunk_document(
     content: &str,
     _strategy: ChunkStrategy,
+    filepath: Option<&str>,
     max_chars: Option<usize>,
     overlap_chars: Option<usize>,
     window_chars: Option<usize>,
 ) -> Vec<Chunk> {
-    let break_points = scan_break_points(content);
+    let regex_bp = scan_break_points(content);
+    let ast_bp = filepath
+        .map(|p| super::ast::get_ast_break_points(content, p))
+        .unwrap_or_default();
+    let break_points = if ast_bp.is_empty() {
+        regex_bp
+    } else {
+        merge_break_points(&regex_bp, &ast_bp)
+    };
     let fences = find_code_fences(content);
     chunk_document_with_break_points(
         content,
@@ -454,7 +495,14 @@ mod tests {
 
     #[test]
     fn chunk_short_doc_returns_one_chunk() {
-        let chunks = chunk_document("hello", ChunkStrategy::Auto, Some(100), Some(10), Some(20));
+        let chunks = chunk_document(
+            "hello",
+            ChunkStrategy::Auto,
+            None,
+            Some(100),
+            Some(10),
+            Some(20),
+        );
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].text, "hello");
     }
@@ -462,7 +510,14 @@ mod tests {
     #[test]
     fn chunk_long_doc_overlaps() {
         let text = "a".repeat(50) + "\n\n" + &"b".repeat(50);
-        let chunks = chunk_document(&text, ChunkStrategy::Auto, Some(40), Some(8), Some(16));
+        let chunks = chunk_document(
+            &text,
+            ChunkStrategy::Auto,
+            None,
+            Some(40),
+            Some(8),
+            Some(16),
+        );
         assert!(chunks.len() >= 2);
         for c in &chunks {
             assert!(c.text.len() <= 40 || c.pos == 0);

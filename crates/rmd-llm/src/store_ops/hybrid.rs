@@ -368,7 +368,9 @@ pub(super) fn build_doc_chunk_map(
 
     let mut map: HashMap<String, ChunkInfo> = HashMap::new();
     for cand in candidates {
-        let chunks = chunk_document(&cand.body, chunk_strategy, None, None, None);
+        // Snippet selection re-chunks candidate bodies; no filepath in scope
+        // so AST chunking is intentionally disabled here.
+        let chunks = chunk_document(&cand.body, chunk_strategy, None, None, None, None);
         if chunks.is_empty() {
             continue;
         }
