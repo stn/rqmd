@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use rmd_core::collections::{find_local_config_path, local_db_path, Config};
+use rmd_core::llm::config::{resolve_models, ResolvedModels};
+use rmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
+use rmd_core::llm::types::ModelResolutionConfig;
 use rmd_core::store::path::{default_db_path, pwd};
 use rmd_core::store::store_config::sync_config_to_db;
 use rmd_core::Store;
-use rmd_core::llm::config::{resolve_embed_model, resolve_generate_model, resolve_rerank_model};
-use rmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
-use rmd_core::llm::types::ModelResolutionConfig;
 
 /// Holds the CLI's index selection plus the lazily-opened [`Store`],
 /// [`Config`], and [`LlamaCpp`] handle. One per `rmd` invocation.
@@ -24,15 +24,6 @@ pub struct IndexState {
     store: Option<Store>,
     config: Option<Config>,
     llama: Option<Arc<LlamaCpp>>,
-}
-
-/// The three model URIs the CLI cares about, fully resolved against env vars
-/// and YAML `models:` overrides.
-#[derive(Debug, Clone)]
-pub struct ResolvedModelUris {
-    pub embed: String,
-    pub generate: String,
-    pub rerank: String,
 }
 
 impl IndexState {
@@ -141,14 +132,10 @@ impl IndexState {
     /// source of truth shared by `pull` (which feeds them to `pull_models`)
     /// and any future caller that needs the URIs without instantiating an
     /// `LlamaCpp`.
-    pub fn resolved_model_uris(&mut self) -> Result<ResolvedModelUris> {
+    pub fn resolved_model_uris(&mut self) -> Result<ResolvedModels> {
         self.config_mut()?;
         let cfg = self.models_config()?;
-        Ok(ResolvedModelUris {
-            embed: resolve_embed_model(Some(&cfg)),
-            generate: resolve_generate_model(Some(&cfg)),
-            rerank: resolve_rerank_model(Some(&cfg)),
-        })
+        Ok(resolve_models(Some(&cfg)))
     }
 
     /// Re-load the YAML and re-sync it into the SQLite `store_collections` /

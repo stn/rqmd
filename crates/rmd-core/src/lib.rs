@@ -23,17 +23,47 @@
 //! * [`store_ops`] — the LLM-using half of `store.ts`: hybrid / vector /
 //!   structured search, query expansion, reranking, embedding generation,
 //!   token-aware chunking. Free functions that combine `store` with `llm`.
+//! * [`rmd_store`] — [`RmdStore`], the top-level handle that bundles the
+//!   three modules above into a single object. Port of
+//!   `tobi/qmd/src/index.ts` `createStore()` / `QMDStore`.
 //!
 //! **Runtime requirement**: the [`llm`] and [`store_ops`] modules expose
 //! `async` APIs that internally use `tokio::sync::oneshot` to bridge between
 //! the dedicated FFI worker threads and the async caller. Any crate that
 //! depends on `rmd-core` and calls these modules MUST run inside a tokio
 //! runtime (`rt-multi-thread` recommended).
+//!
+//! # RMD quickstart
+//!
+//! ```no_run
+//! use rmd_core::{RmdStore, RmdStoreOptions, SearchOptions};
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let store = RmdStore::open(RmdStoreOptions {
+//!     db_path: "./index.sqlite".into(),
+//!     config_path: Some("./rmd.yml".into()),
+//!     ..Default::default()
+//! })?;
+//!
+//! let hits = store.search(SearchOptions {
+//!     query: Some("authentication flow".into()),
+//!     ..Default::default()
+//! }).await?;
+//!
+//! store.close().await;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Rust has no async `Drop`. Always call [`RmdStore::close`] (or
+//! [`RmdStore::shutdown`] when the store is shared) before drop, otherwise
+//! the [`LlamaCpp`] worker threads leak.
 
 pub mod collections;
 pub mod db;
 pub mod llm;
 pub mod paths;
+pub mod rmd_store;
 pub mod store;
 pub mod store_ops;
 
@@ -89,6 +119,15 @@ pub use store_ops::{
     HashForEmbedding, HybridQueryOptions, HybridQueryResult, IndexHealthInfo, IndexStatus,
     RerankCandidate, RerankScore, Result as StoreOpsResult, SearchHooks, StructuredSearchOptions,
     TokenChunk, VectorSearchOptions, VectorSearchResult,
+};
+
+// `RmdStore`: combines [`Store`], [`LlamaCpp`], and [`Config`] into the
+// single object that `tobi/qmd`'s TypeScript `createStore()` returns.
+// Errors are exposed as `RmdStoreError` to avoid colliding with the
+// `collections::Error` re-exported as crate-root `Error`.
+pub use rmd_store::{
+    AddCollectionOptions, Error as RmdStoreError, MultiGetBundle, Result as RmdStoreResult,
+    RmdStore, RmdStoreOptions, SearchOptions, UpdateOptions, UpdateProgress, UpdateResult,
 };
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
