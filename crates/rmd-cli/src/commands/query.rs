@@ -15,9 +15,8 @@ use serde_json::json;
 
 use crate::cli::QueryArgs;
 use crate::color::Palette;
-use crate::search_view::{
-    hybrid_result_to_hit, print_hits_cli, print_hits_json, ExplainView, Hit,
-};
+use crate::output::OutputFormat;
+use crate::search_view::{hybrid_result_to_hit, print_hits, ExplainView, Hit};
 use crate::state::IndexState;
 
 pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
@@ -28,6 +27,7 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
         );
     }
     let q = args.query.join(" ");
+    let fmt = OutputFormat::from(&args.format);
 
     let llm = state.llama_cpp()?;
     let store: &Store = state.store_mut()?;
@@ -45,7 +45,7 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
         intent: args.intent.clone(),
         skip_rerank: args.no_rerank,
         chunk_strategy: args.chunk_strategy.map(Into::into),
-        hooks: build_query_hooks(args.flags.json),
+        hooks: build_query_hooks(fmt),
     };
 
     let llm_dyn: Arc<dyn Llm> = llm;
@@ -58,25 +58,24 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
         .map(|r| hybrid_result_to_hit(r, args.flags.full))
         .collect();
 
-    if args.flags.json {
-        if args.explain {
-            // Build a top-level object that pairs each Hit with its trace.
-            // ExplainView borrows from `results`, so this stays alloc-light.
-            let explains: Vec<ExplainView<'_>> = results
-                .iter()
-                .filter_map(|r| r.explain.as_ref().map(|e| ExplainView::new(&r.file, e)))
-                .collect();
-            let s = serde_json::to_string_pretty(&json!({
-                "hits": hits,
-                "explain": explains,
-            }))?;
-            println!("{s}");
-        } else {
-            print_hits_json(&hits)?;
-        }
+    // `--explain` is only honoured for JSON (full trace) and CLI (stderr
+    // summary); other formats render the hits and silently drop the trace —
+    // CSV/MD/XML/files have no natural slot for it.
+    if fmt == OutputFormat::Json && args.explain {
+        // Build a top-level object that pairs each Hit with its trace.
+        // ExplainView borrows from `results`, so this stays alloc-light.
+        let explains: Vec<ExplainView<'_>> = results
+            .iter()
+            .filter_map(|r| r.explain.as_ref().map(|e| ExplainView::new(&r.file, e)))
+            .collect();
+        let s = serde_json::to_string_pretty(&json!({
+            "hits": hits,
+            "explain": explains,
+        }))?;
+        println!("{s}");
     } else {
-        print_hits_cli(&hits, p, args.flags.line_numbers);
-        if args.explain {
+        print_hits(&hits, fmt, p, args.flags.line_numbers)?;
+        if fmt == OutputFormat::Cli && args.explain {
             print_explain_summary(&results, p);
         }
     }
@@ -100,8 +99,10 @@ fn print_explain_summary(results: &[HybridQueryResult], p: &Palette) {
     }
 }
 
-fn build_query_hooks(json: bool) -> SearchHooks {
-    if json {
+/// Verbose progress logging only in the human CLI mode — any
+/// machine-readable format runs silently so stderr stays clean.
+fn build_query_hooks(fmt: OutputFormat) -> SearchHooks {
+    if fmt != OutputFormat::Cli {
         return SearchHooks::default();
     }
     SearchHooks {

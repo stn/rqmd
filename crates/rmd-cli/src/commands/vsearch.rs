@@ -14,7 +14,8 @@ use rmd_llm::Llm;
 
 use crate::cli::VsearchArgs;
 use crate::color::Palette;
-use crate::search_view::{print_hits_cli, print_hits_json, vector_result_to_hit};
+use crate::output::OutputFormat;
+use crate::search_view::{print_hits, vector_result_to_hit};
 use crate::state::IndexState;
 
 pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
@@ -25,6 +26,7 @@ pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Resu
         );
     }
     let q = args.query.join(" ");
+    let fmt = OutputFormat::from(&args.format);
 
     // Borrow order matters: take Arc<LlamaCpp> first (consumes &mut self only
     // for the call), then re-borrow store_mut's &mut Store as &Store for the
@@ -41,7 +43,7 @@ pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Resu
         }),
         min_score: Some(args.flags.min_score.unwrap_or(0.3)),
         intent: args.intent.clone(),
-        hooks: build_vsearch_hooks(args.flags.json),
+        hooks: build_vsearch_hooks(fmt),
     };
 
     // Arc<LlamaCpp> -> Arc<dyn Llm> via let-binding unsized coercion.
@@ -56,18 +58,16 @@ pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Resu
         .map(|r| vector_result_to_hit(r, &q, args.intent.as_deref(), args.flags.full))
         .collect();
 
-    if args.flags.json {
-        print_hits_json(&hits)?;
-    } else {
-        print_hits_cli(&hits, p, args.flags.line_numbers);
-    }
+    print_hits(&hits, fmt, p, args.flags.line_numbers)?;
     Ok(())
 }
 
 /// `vector_search_query` only fires `on_expand`; other hooks would be ignored.
 /// See `crates/rmd-llm/src/store_ops/vector_search.rs:32-34`.
-fn build_vsearch_hooks(json: bool) -> SearchHooks {
-    if json {
+/// Verbose logging only in the human CLI mode — any machine-readable format
+/// runs silently so stderr stays clean.
+fn build_vsearch_hooks(fmt: OutputFormat) -> SearchHooks {
+    if fmt != OutputFormat::Cli {
         return SearchHooks::default();
     }
     SearchHooks {

@@ -221,12 +221,11 @@ pub struct LsArgs {
 // search / vsearch / query
 // ============================================================================
 
-/// Flags common to `search`, `vsearch`, and `query`.
+/// Flags common to `search`, `vsearch`, and `query`. `FormatFlags` is
+/// flattened separately at the `*Args` level (not here) — see the comment
+/// on [`FormatFlags`] for why.
 #[derive(Debug, Args, Clone)]
 pub struct SearchFlags {
-    /// Output as JSON (otherwise pretty-printed CLI).
-    #[arg(long)]
-    pub json: bool,
     /// Restrict to a single collection. Pass at most once.
     #[arg(short = 'c', long)]
     pub collection: Vec<String>,
@@ -251,6 +250,8 @@ pub struct SearchFlags {
 pub struct SearchArgs {
     #[command(flatten)]
     pub flags: SearchFlags,
+    #[command(flatten)]
+    pub format: FormatFlags,
     /// Query string (positional, joined by spaces).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub query: Vec<String>,
@@ -260,6 +261,8 @@ pub struct SearchArgs {
 pub struct VsearchArgs {
     #[command(flatten)]
     pub flags: SearchFlags,
+    #[command(flatten)]
+    pub format: FormatFlags,
     /// Domain intent (steers the vector / hyde expansion).
     #[arg(long)]
     pub intent: Option<String>,
@@ -272,6 +275,8 @@ pub struct VsearchArgs {
 pub struct QueryArgs {
     #[command(flatten)]
     pub flags: SearchFlags,
+    #[command(flatten)]
+    pub format: FormatFlags,
     /// Domain intent.
     #[arg(long)]
     pub intent: Option<String>,
@@ -354,16 +359,21 @@ impl From<ChunkStrategyArg> for ChunkStrategy {
     }
 }
 
+/// Group declared at struct level (not per-field) so the mutual-exclusion
+/// survives being nested twice — `FormatFlags` is flattened into both
+/// `MultiGetArgs` (one level) and `SearchFlags` → `SearchArgs` (two levels);
+/// per-field `group = "format"` was silently dropped at the second level.
 #[derive(Debug, Args, Clone, Copy, Default)]
+#[group(id = "format", multiple = false)]
 pub struct FormatFlags {
-    #[arg(long, group = "format")]
+    #[arg(long)]
     pub json: bool,
-    #[arg(long, group = "format")]
+    #[arg(long)]
     pub csv: bool,
-    #[arg(long, group = "format")]
+    #[arg(long)]
     pub md: bool,
-    #[arg(long, group = "format")]
+    #[arg(long)]
     pub xml: bool,
-    #[arg(long, group = "format")]
+    #[arg(long)]
     pub files: bool,
 }

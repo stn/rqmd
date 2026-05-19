@@ -7,7 +7,8 @@ use rmd_core::store::search::search_fts;
 
 use crate::cli::{SearchArgs, SearchFlags};
 use crate::color::Palette;
-use crate::search_view::{print_hits_cli, print_hits_json, search_result_to_hit};
+use crate::output::OutputFormat;
+use crate::search_view::{print_hits, search_result_to_hit};
 use crate::state::IndexState;
 
 pub fn run(args: SearchArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
@@ -36,11 +37,8 @@ pub fn run(args: SearchArgs, state: &mut IndexState, p: &Palette) -> Result<()> 
         .map(|r| search_result_to_hit(r, &q, None, args.flags.full))
         .collect();
 
-    if args.flags.json {
-        print_hits_json(&hits)?;
-    } else {
-        print_hits_cli(&hits, p, args.flags.line_numbers);
-    }
+    let fmt = OutputFormat::from(&args.format);
+    print_hits(&hits, fmt, p, args.flags.line_numbers)?;
     Ok(())
 }
 
