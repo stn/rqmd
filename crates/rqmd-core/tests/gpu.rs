@@ -52,6 +52,13 @@ fn gpu_mode_runtime_backend_values_warn_but_return_auto() {
     // metal / vulkan / cuda are accepted for env compatibility but treated
     // as Auto (with a tracing::warn the test can't easily observe — we
     // assert the return value only).
+    //
+    // NOTE: This is an INTENTIONAL divergence from TS. `tobi/qmd`'s
+    // `resolveLlamaGpuMode` passes these backends through unchanged
+    // (`"metal" -> "metal"`); rqmd's `LlamaGpuMode` is a two-state
+    // `{ Off, Auto }` enum (the model-loading path can't consume an explicit
+    // backend), so named backends collapse to `Auto`. Do not "fix" this to
+    // match TS — keep the behaviors deliberately non-identical.
     assert_eq!(
         resolve_llama_gpu_mode(Some("metal"), None),
         LlamaGpuMode::Auto

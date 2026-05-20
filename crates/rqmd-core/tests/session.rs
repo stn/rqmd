@@ -178,3 +178,48 @@ async fn delegated_methods_propagate_ci_disabled_when_underlying_llm_is_ci_mode(
         .unwrap_err();
     assert!(matches!(err, Error::CiDisabled), "got {err:?}");
 }
+
+// =============================================================================
+// Optional: session-mediated real-model operations (TS withLLMSession
+// "session provides access to LLM operations" / "session embedBatch works
+// correctly"). Real GGUF, hence #[ignore] and a non-CI instance.
+// =============================================================================
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "loads embeddinggemma-300M (~300 MB) and runs CPU inference"]
+async fn with_llm_session_real_embed_and_embed_batch_work() {
+    let llm = Arc::new(LlamaCpp::new(LlamaCppConfig::default()));
+    let dim = with_llm_session(
+        llm,
+        LlmSessionOptions {
+            name: Some("real-embed".into()),
+            ..Default::default()
+        },
+        |session| async move {
+            assert!(session.is_valid());
+
+            let single = session.embed("test text", EmbedOptions::default()).await?;
+            let single_dim = single.expect("embedding present").embedding.len();
+            assert!(single_dim > 0);
+
+            let batch = session
+                .embed_batch(
+                    &["Hello world".into(), "Another document".into()],
+                    EmbedOptions::default(),
+                )
+                .await?;
+            assert_eq!(batch.len(), 2);
+            for slot in &batch {
+                assert_eq!(
+                    slot.as_ref().expect("embedding present").embedding.len(),
+                    single_dim
+                );
+            }
+
+            Ok::<usize, Error>(single_dim)
+        },
+    )
+    .await
+    .unwrap();
+    assert!(dim > 0);
+}

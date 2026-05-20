@@ -47,3 +47,33 @@ async fn expand_query_returns_at_least_one_parseable_line() {
 
     llm.dispose().await;
 }
+
+/// TS: expandQuery "can exclude lexical queries". With `include_lexical=false`
+/// no `lex` entry may appear — the filter applies to both the model-output and
+/// the fallback paths, so this holds regardless of what the model emits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "loads Qwen3-0.6B (~600 MB) and runs CPU inference"]
+async fn expand_query_can_exclude_lexical() {
+    let llm = LlamaCpp::new(LlamaCppConfig {
+        generate_model: Some("hf:ggml-org/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf".into()),
+        ..Default::default()
+    });
+
+    let result = llm
+        .expand_query(
+            "authentication setup",
+            ExpandQueryOptions {
+                include_lexical: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("expand_query must succeed against Qwen3-0.6B");
+
+    assert!(
+        !result.iter().any(|q| q.type_ == QueryType::Lex),
+        "no lex entries when include_lexical=false; got {result:?}"
+    );
+
+    llm.dispose().await;
+}

@@ -14,6 +14,7 @@ use rqmd_core::llm::config::{
     DEFAULT_EMBED_CONTEXT_SIZE, DEFAULT_EMBED_MODEL, DEFAULT_EXPAND_CONTEXT_SIZE,
     DEFAULT_GENERATE_MODEL, DEFAULT_RERANK_CONTEXT_SIZE, DEFAULT_RERANK_MODEL,
 };
+use rqmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rqmd_core::llm::types::ModelResolutionConfig;
 
 const EMBED_ENV: &str = "QMD_EMBED_MODEL";
@@ -201,4 +202,54 @@ fn resolve_expand_context_size_errors_on_zero_config() {
     let err = resolve_expand_context_size(Some(0)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("must be a positive integer"), "got: {msg}");
+}
+
+#[test]
+#[serial]
+fn resolve_expand_context_size_warns_and_falls_back_on_invalid_env() {
+    // TS parity: "falls back to default and warns when QMD_EXPAND_CONTEXT_SIZE
+    // is invalid". Mirrors the embed-version test above: a non-positive /
+    // non-numeric / whitespace env value falls back to the default.
+    for bad in ["bad", "0", "  "] {
+        with_set(EXPAND_CTX_ENV, bad, || {
+            assert_eq!(
+                resolve_expand_context_size(None).unwrap(),
+                DEFAULT_EXPAND_CONTEXT_SIZE,
+                "QMD_EXPAND_CONTEXT_SIZE={bad:?} must fall back to default",
+            );
+        });
+    }
+}
+
+// =============================================================================
+// Constructor ↔ resolver parity
+// =============================================================================
+
+#[test]
+#[serial]
+fn constructor_resolves_model_uris_via_the_same_resolver() {
+    // TS parity: `new LlamaCpp(config).embedModelName === resolveEmbedModel(config)`.
+    // This is somewhat tautological in Rust because `LlamaCpp::new` calls
+    // `resolve_*_model` internally — it's a low-cost regression guard against a
+    // future refactor that bypasses the resolver, NOT a meaningful behavior test.
+    with_unset(EMBED_ENV, || {
+        with_unset(GENERATE_ENV, || {
+            with_unset(RERANK_ENV, || {
+                let llm = LlamaCpp::new(LlamaCppConfig {
+                    embed_model: Some("hf:config/embed/file.gguf".into()),
+                    generate_model: Some("hf:config/generate/file.gguf".into()),
+                    rerank_model: Some("hf:config/rerank/file.gguf".into()),
+                    ..Default::default()
+                });
+                let res = ModelResolutionConfig {
+                    embed: Some("hf:config/embed/file.gguf".into()),
+                    generate: Some("hf:config/generate/file.gguf".into()),
+                    rerank: Some("hf:config/rerank/file.gguf".into()),
+                };
+                assert_eq!(llm.embed_model_uri(), resolve_embed_model(Some(&res)));
+                assert_eq!(llm.generate_model_uri(), resolve_generate_model(Some(&res)));
+                assert_eq!(llm.rerank_model_uri(), resolve_rerank_model(Some(&res)));
+            });
+        });
+    });
 }
