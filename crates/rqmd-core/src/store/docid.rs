@@ -12,18 +12,36 @@ pub fn get_docid(hash: &str) -> String {
     hash.chars().take(6).collect()
 }
 
-/// Normalise a docid for comparison: lowercase + strip leading `#`.
+/// Normalise a docid for comparison: trim → strip a matching pair of
+/// surrounding quotes → strip a single leading `#`. Case is **preserved**
+/// (TS does not lowercase here; the downstream `LIKE` is ASCII
+/// case-insensitive anyway).
+///
 /// Mirrors `normalizeDocid` (`store.ts:2531`).
 pub fn normalize_docid(docid: &str) -> String {
-    let trimmed = docid.trim().trim_start_matches('#');
-    trimmed.to_ascii_lowercase()
+    let mut s = docid.trim();
+
+    // Strip a matching pair of surrounding quotes (single or double).
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            s = &s[1..s.len() - 1];
+        }
+    }
+
+    // Strip a single leading `#`.
+    s.strip_prefix('#').unwrap_or(s).to_string()
 }
 
-/// Quick "does this look like a docid?" test: 6 lowercase-hex chars.
-/// Mirrors `isDocid` (`store.ts:2553`).
+/// Quick "does this look like a docid?" test: the normalised form is a hex
+/// string of **6 or more** characters (case-insensitive).
+///
+/// Mirrors `isDocid` (`store.ts:2553`): `length >= 6 && /^[a-f0-9]+$/i`.
 pub fn is_docid(input: &str) -> bool {
     let normalised = normalize_docid(input);
-    normalised.len() == 6 && normalised.bytes().all(|b| b.is_ascii_hexdigit())
+    normalised.len() >= 6 && normalised.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Reference returned by [`find_document_by_docid`].
@@ -133,19 +151,123 @@ mod tests {
         assert_eq!(get_docid("abcdef0123456789"), "abcdef");
     }
 
+    // --- normalize_docid: ported from store.test.ts `describe("normalizeDocid")` ---
+
     #[test]
-    fn normalize_strips_hash_prefix() {
-        assert_eq!(normalize_docid("#ABC123"), "abc123");
-        assert_eq!(normalize_docid("  AbC123  "), "abc123");
+    fn normalize_strips_leading_hash() {
+        assert_eq!(normalize_docid("#abc123"), "abc123");
+        assert_eq!(normalize_docid("#def456"), "def456");
     }
 
     #[test]
-    fn is_docid_accepts_six_hex() {
+    fn normalize_returns_bare_hex_unchanged() {
+        assert_eq!(normalize_docid("abc123"), "abc123");
+        assert_eq!(normalize_docid("def456"), "def456");
+    }
+
+    #[test]
+    fn normalize_strips_surrounding_double_quotes() {
+        assert_eq!(normalize_docid("\"#abc123\""), "abc123");
+        assert_eq!(normalize_docid("\"abc123\""), "abc123");
+    }
+
+    #[test]
+    fn normalize_strips_surrounding_single_quotes() {
+        assert_eq!(normalize_docid("'#abc123'"), "abc123");
+        assert_eq!(normalize_docid("'abc123'"), "abc123");
+    }
+
+    #[test]
+    fn normalize_handles_quoted_docid_without_hash() {
+        assert_eq!(normalize_docid("\"def456\""), "def456");
+        assert_eq!(normalize_docid("'def456'"), "def456");
+    }
+
+    #[test]
+    fn normalize_handles_whitespace() {
+        assert_eq!(normalize_docid("  #abc123  "), "abc123");
+        assert_eq!(normalize_docid("  abc123  "), "abc123");
+    }
+
+    #[test]
+    fn normalize_preserves_uppercase_hex() {
+        assert_eq!(normalize_docid("#ABC123"), "ABC123");
+        assert_eq!(normalize_docid("\"ABC123\""), "ABC123");
+    }
+
+    #[test]
+    fn normalize_does_not_strip_mismatched_quotes() {
+        // `"abc123'` — opens with `"`, closes with `'` → no strip.
+        assert_eq!(normalize_docid("\"abc123'"), "\"abc123'");
+        // `'abc123"` — opens with `'`, closes with `"` → no strip.
+        assert_eq!(normalize_docid("'abc123\""), "'abc123\"");
+    }
+
+    // --- is_docid: ported from store.test.ts `describe("isDocid")` ---
+
+    #[test]
+    fn is_docid_accepts_hash_format() {
+        assert!(is_docid("#abc123"));
+        assert!(is_docid("#def456"));
+        assert!(is_docid("#ABCDEF"));
+    }
+
+    #[test]
+    fn is_docid_accepts_bare_six_char_hex() {
         assert!(is_docid("abc123"));
-        assert!(is_docid("#ABC123"));
-        assert!(!is_docid("xyz123"));
+        assert!(is_docid("def456"));
+        assert!(is_docid("ABCDEF"));
+    }
+
+    #[test]
+    fn is_docid_accepts_longer_hex() {
+        assert!(is_docid("abc123def456"));
+        assert!(is_docid("#abc123def456"));
+    }
+
+    #[test]
+    fn is_docid_accepts_double_quoted() {
+        assert!(is_docid("\"#abc123\""));
+        assert!(is_docid("\"abc123\""));
+    }
+
+    #[test]
+    fn is_docid_accepts_single_quoted() {
+        assert!(is_docid("'#abc123'"));
+        assert!(is_docid("'abc123'"));
+    }
+
+    #[test]
+    fn is_docid_rejects_non_hex() {
+        assert!(!is_docid("ghijkl"));
+        assert!(!is_docid("#ghijkl"));
+        assert!(!is_docid("abc12g"));
+    }
+
+    #[test]
+    fn is_docid_rejects_shorter_than_six() {
         assert!(!is_docid("abc12"));
-        assert!(!is_docid("abc1234"));
+        assert!(!is_docid("#abc1"));
+        assert!(!is_docid("'abc'"));
+    }
+
+    #[test]
+    fn is_docid_rejects_empty() {
+        assert!(!is_docid(""));
+        assert!(!is_docid("#"));
+        assert!(!is_docid("\"\""));
+    }
+
+    #[test]
+    fn is_docid_rejects_file_paths() {
+        assert!(!is_docid("/path/to/file.md"));
+        assert!(!is_docid("path/to/file.md"));
+        assert!(!is_docid("qmd://collection/file.md"));
+    }
+
+    #[test]
+    fn is_docid_rejects_hex_with_extension() {
+        assert!(!is_docid("abc123.md"));
     }
 
     #[test]

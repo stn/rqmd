@@ -263,4 +263,64 @@ mod tests {
         let expected = 1.0 / 61.0 + 1.0 / 61.0 + 0.05;
         assert!((t.total_score - expected).abs() < 1e-9);
     }
+
+    // --- ported from store.test.ts `describe("Reciprocal Rank Fusion")` ---
+
+    #[test]
+    fn rrf_combines_single_list_in_order() {
+        let l1 = vec![
+            ranked("doc1", 0.9),
+            ranked("doc2", 0.8),
+            ranked("doc3", 0.7),
+        ];
+        let fused = reciprocal_rank_fusion(&[l1], &[], None);
+        assert_eq!(fused[0].file, "doc1");
+        assert_eq!(fused[1].file, "doc2");
+        assert_eq!(fused[2].file, "doc3");
+    }
+
+    #[test]
+    fn rrf_merges_documents_from_multiple_lists() {
+        let l1 = vec![ranked("doc1", 0.9), ranked("doc2", 0.8)];
+        let l2 = vec![ranked("doc2", 0.95), ranked("doc3", 0.85)];
+        let fused = reciprocal_rank_fusion(&[l1, l2], &[], None);
+        let files: Vec<_> = fused.iter().map(|r| r.file.as_str()).collect();
+        assert!(files.contains(&"doc1"));
+        assert!(files.contains(&"doc2"));
+        assert!(files.contains(&"doc3"));
+    }
+
+    #[test]
+    fn rrf_respects_weights() {
+        let l1 = vec![ranked("doc1", 0.9)];
+        let l2 = vec![ranked("doc2", 0.9)];
+        // Double weight on list 1 → doc1 ranks first.
+        let fused = reciprocal_rank_fusion(&[l1, l2], &[2.0, 1.0], None);
+        assert_eq!(fused[0].file, "doc1");
+    }
+
+    #[test]
+    fn rrf_adds_top_rank_bonus() {
+        let l1 = vec![ranked("doc1", 0.9), ranked("doc2", 0.8)];
+        let l2 = vec![ranked("doc3", 0.85)];
+        let fused = reciprocal_rank_fusion(&[l1, l2], &[], None);
+        let by_file: HashMap<_, _> = fused.iter().map(|r| (r.file.clone(), r.score)).collect();
+        // doc1 is #1 (+0.05), doc2 is #2 (+0.02) → doc1 scores higher.
+        assert!(by_file["doc1"] > by_file["doc2"]);
+    }
+
+    #[test]
+    fn rrf_handles_empty_lists() {
+        let fused = reciprocal_rank_fusion(&[vec![], vec![]], &[], None);
+        assert!(fused.is_empty());
+    }
+
+    #[test]
+    fn rrf_uses_k_parameter() {
+        let list = vec![ranked("doc1", 0.9)];
+        let fused60 = reciprocal_rank_fusion(&[list.clone()], &[], Some(60));
+        let fused30 = reciprocal_rank_fusion(&[list], &[], Some(30));
+        // Lower k → higher score for top ranks.
+        assert!(fused30[0].score > fused60[0].score);
+    }
 }

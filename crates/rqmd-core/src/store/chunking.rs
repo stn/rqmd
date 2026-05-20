@@ -523,4 +523,315 @@ mod tests {
             assert!(c.text.len() <= 40 || c.pos == 0);
         }
     }
+
+    // Helper: build a BreakPoint with an explicit score (find_best_cutoff /
+    // merge_break_points compare the `score` field, not `kind.score()`).
+    fn mk(pos: usize, score: i32, kind: BreakKind) -> BreakPoint {
+        BreakPoint { pos, score, kind }
+    }
+
+    // --- scanBreakPoints: ported from store.test.ts `describe("scanBreakPoints")` ---
+
+    #[test]
+    fn break_points_detect_code_blocks() {
+        let bps = scan_break_points("Before\n```js\ncode\n```\nAfter");
+        let code: Vec<_> = bps
+            .iter()
+            .filter(|b| b.kind == BreakKind::CodeBlock)
+            .collect();
+        assert_eq!(code.len(), 2); // opening and closing
+        assert_eq!(code[0].score, 80);
+    }
+
+    #[test]
+    fn break_points_detect_horizontal_rule() {
+        let bps = scan_break_points("Text\n---\nMore text");
+        let hr = bps.iter().find(|b| b.kind == BreakKind::Hr).unwrap();
+        assert_eq!(hr.score, 60);
+    }
+
+    #[test]
+    fn break_points_detect_blank_lines() {
+        let bps = scan_break_points("First paragraph.\n\nSecond paragraph.");
+        let blank = bps.iter().find(|b| b.kind == BreakKind::Blank).unwrap();
+        assert_eq!(blank.score, 20);
+    }
+
+    #[test]
+    fn break_points_detect_list_items() {
+        let bps = scan_break_points("Intro\n- Item 1\n- Item 2\n1. Numbered");
+        let lists: Vec<_> = bps.iter().filter(|b| b.kind == BreakKind::List).collect();
+        let num: Vec<_> = bps
+            .iter()
+            .filter(|b| b.kind == BreakKind::NumList)
+            .collect();
+        assert_eq!(lists.len(), 2);
+        assert_eq!(num.len(), 1);
+        assert_eq!(lists[0].score, 5);
+        assert_eq!(num[0].score, 5);
+    }
+
+    #[test]
+    fn break_points_detect_newlines_fallback() {
+        let bps = scan_break_points("Line 1\nLine 2\nLine 3");
+        let nl: Vec<_> = bps
+            .iter()
+            .filter(|b| b.kind == BreakKind::Newline)
+            .collect();
+        assert_eq!(nl.len(), 2);
+        assert_eq!(nl[0].score, 1);
+    }
+
+    #[test]
+    fn break_points_sorted_by_position() {
+        let bps = scan_break_points("A\n# B\n\nC\n## D");
+        for w in bps.windows(2) {
+            assert!(w[1].pos > w[0].pos);
+        }
+    }
+
+    #[test]
+    fn break_points_higher_score_wins_same_position() {
+        // `\n#` matches both newline (1) and h1 (100) — only h1 is kept.
+        let bps = scan_break_points("Text\n# Heading");
+        let at4: Vec<_> = bps.iter().filter(|b| b.pos == 4).collect();
+        assert_eq!(at4.len(), 1);
+        assert_eq!(at4[0].kind, BreakKind::H1);
+        assert_eq!(at4[0].score, 100);
+    }
+
+    // --- findCodeFences: ported from store.test.ts `describe("findCodeFences")` ---
+
+    #[test]
+    fn find_single_code_fence_exact_bounds() {
+        let text = "Before\n```js\ncode here\n```\nAfter";
+        let fences = find_code_fences(text);
+        assert_eq!(fences.len(), 1);
+        assert_eq!(fences[0].start, 6); // position of first \n```
+        assert_eq!(fences[0].end, 26); // after the closing \n```
+    }
+
+    #[test]
+    fn find_multiple_code_fences() {
+        let text = "Intro\n```\nblock1\n```\nMiddle\n```\nblock2\n```\nEnd";
+        assert_eq!(find_code_fences(text).len(), 2);
+    }
+
+    #[test]
+    fn find_no_code_fences_returns_empty() {
+        assert_eq!(find_code_fences("No code fences here").len(), 0);
+    }
+
+    // --- isInsideCodeFence: ported from store.test.ts `describe("isInsideCodeFence")` ---
+
+    #[test]
+    fn inside_code_fence_true_within() {
+        let f = [CodeFenceRegion { start: 10, end: 30 }];
+        assert!(is_inside_code_fence(15, &f));
+        assert!(is_inside_code_fence(20, &f));
+    }
+
+    #[test]
+    fn inside_code_fence_false_outside() {
+        let f = [CodeFenceRegion { start: 10, end: 30 }];
+        assert!(!is_inside_code_fence(5, &f));
+        assert!(!is_inside_code_fence(35, &f));
+    }
+
+    #[test]
+    fn inside_code_fence_false_at_boundaries() {
+        let f = [CodeFenceRegion { start: 10, end: 30 }];
+        assert!(!is_inside_code_fence(10, &f)); // at start
+        assert!(!is_inside_code_fence(30, &f)); // at end
+    }
+
+    #[test]
+    fn inside_code_fence_multiple() {
+        let f = [
+            CodeFenceRegion { start: 10, end: 30 },
+            CodeFenceRegion { start: 50, end: 70 },
+        ];
+        assert!(is_inside_code_fence(20, &f));
+        assert!(is_inside_code_fence(60, &f));
+        assert!(!is_inside_code_fence(40, &f));
+    }
+
+    // --- findBestCutoff: ported from store.test.ts `describe("findBestCutoff")` ---
+
+    #[test]
+    fn cutoff_prefers_higher_score() {
+        let bps = [
+            mk(100, 1, BreakKind::Newline),
+            mk(150, 100, BreakKind::H1),
+            mk(180, 20, BreakKind::Blank),
+        ];
+        assert_eq!(find_best_cutoff(&bps, 200, 100, 0.7, &[]), 150);
+    }
+
+    #[test]
+    fn cutoff_h2_at_window_edge_beats_blank_at_target() {
+        let bps = [mk(100, 90, BreakKind::H2), mk(195, 20, BreakKind::Blank)];
+        assert_eq!(find_best_cutoff(&bps, 200, 100, 0.7, &[]), 100);
+    }
+
+    #[test]
+    fn cutoff_high_score_overcomes_distance() {
+        let bps = [mk(150, 100, BreakKind::H1), mk(195, 1, BreakKind::Newline)];
+        assert_eq!(find_best_cutoff(&bps, 200, 100, 0.7, &[]), 150);
+    }
+
+    #[test]
+    fn cutoff_returns_target_when_no_breaks_in_window() {
+        let bps = [mk(10, 100, BreakKind::H1)]; // before window
+        assert_eq!(find_best_cutoff(&bps, 200, 100, 0.7, &[]), 200);
+    }
+
+    #[test]
+    fn cutoff_skips_break_points_inside_code_fences() {
+        let bps = [mk(150, 100, BreakKind::H1), mk(180, 20, BreakKind::Blank)];
+        let fences = [CodeFenceRegion {
+            start: 140,
+            end: 160,
+        }];
+        assert_eq!(find_best_cutoff(&bps, 200, 100, 0.7, &fences), 180);
+    }
+
+    #[test]
+    fn cutoff_handles_empty_break_points() {
+        assert_eq!(find_best_cutoff(&[], 200, 100, 0.7, &[]), 200);
+    }
+
+    // --- mergeBreakPoints: ported from store.test.ts `describe("mergeBreakPoints")` ---
+
+    #[test]
+    fn merge_keeps_highest_score_per_position() {
+        let regex = [mk(10, 20, BreakKind::Blank), mk(50, 1, BreakKind::Newline)];
+        let ast = [
+            mk(10, 90, BreakKind::AstFunc),
+            mk(100, 100, BreakKind::AstClass),
+        ];
+        let merged = merge_break_points(&regex, &ast);
+        assert_eq!(merged.len(), 3);
+        let at10 = merged.iter().find(|b| b.pos == 10).unwrap();
+        assert_eq!(at10.score, 90);
+        assert_eq!(at10.kind, BreakKind::AstFunc);
+        assert_eq!(merged.iter().find(|b| b.pos == 50).unwrap().score, 1);
+        assert_eq!(merged.iter().find(|b| b.pos == 100).unwrap().score, 100);
+    }
+
+    #[test]
+    fn merge_returns_sorted_by_position() {
+        let a = [mk(100, 10, BreakKind::Newline)];
+        let b = [mk(5, 20, BreakKind::Blank)];
+        let merged = merge_break_points(&a, &b);
+        assert_eq!(merged[0].pos, 5);
+        assert_eq!(merged[1].pos, 100);
+    }
+
+    // --- chunkDocument integration: ported from store.test.ts ---
+
+    #[test]
+    fn chunk_prefers_paragraph_breaks() {
+        let content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.".repeat(50);
+        let chunks = chunk_document(
+            &content,
+            ChunkStrategy::Auto,
+            None,
+            Some(500),
+            Some(0),
+            None,
+        );
+        assert!(chunks.len() > 1);
+    }
+
+    #[test]
+    fn chunk_handles_utf8_without_splitting_codepoints() {
+        // With overlap 0 the chunks tile exactly; reconstructing must yield the
+        // original — only possible if no multi-byte codepoint was split.
+        let content = "こんにちは世界".repeat(500);
+        let chunks = chunk_document(
+            &content,
+            ChunkStrategy::Auto,
+            None,
+            Some(1000),
+            Some(0),
+            None,
+        );
+        assert!(chunks.len() > 1);
+        let joined: String = chunks.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(joined, content);
+    }
+
+    #[test]
+    fn chunk_default_params_use_3600_char_chunks() {
+        let content = "Word ".repeat(2500); // ~12500 chars
+        let chunks = chunk_document(&content, ChunkStrategy::Auto, None, None, None, None);
+        assert!(chunks.len() > 1);
+        assert!(chunks[0].text.len() > 2800);
+        assert!(chunks[0].text.len() <= CHUNK_SIZE_CHARS); // 3600
+    }
+
+    #[test]
+    fn chunk_prefers_headings_over_arbitrary_breaks() {
+        let section1 = "Introduction text here. ".repeat(70); // 1680 chars
+        let section2 = "Main content text here. ".repeat(50);
+        let content = format!("{section1}\n# Main Section\n{section2}");
+        let heading_pos = content.find("\n# Main Section").unwrap();
+        let chunks = chunk_document(
+            &content,
+            ChunkStrategy::Auto,
+            None,
+            Some(2000),
+            Some(0),
+            Some(800),
+        );
+        assert!(chunks.len() >= 2);
+        assert_eq!(chunks[0].text.len(), heading_pos);
+    }
+
+    #[test]
+    fn chunk_handles_mixed_markdown_elements() {
+        let block = r#"# Introduction
+
+This is the introduction paragraph with some text.
+
+## Section 1
+
+Some content in section 1.
+
+- List item 1
+- List item 2
+- List item 3
+
+## Section 2
+
+```javascript
+function hello() {
+  console.log("Hello");
+}
+```
+
+More text after the code block.
+
+---
+
+## Section 3
+
+Final section content.
+"#;
+        let content = block.repeat(10);
+        let chunks = chunk_document(
+            &content,
+            ChunkStrategy::Auto,
+            None,
+            Some(500),
+            Some(75),
+            Some(200),
+        );
+        assert!(chunks.len() > 5);
+        for c in &chunks {
+            assert!(!c.text.is_empty());
+            assert!(content.is_char_boundary(c.pos));
+        }
+    }
 }

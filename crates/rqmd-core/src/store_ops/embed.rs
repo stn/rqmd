@@ -160,6 +160,19 @@ pub async fn generate_embeddings(
         .max_batch_bytes
         .unwrap_or(DEFAULT_EMBED_MAX_BATCH_BYTES);
 
+    // Mirror TS `generateEmbeddings`: reject non-positive batch limits up
+    // front rather than silently looping forever on a zero budget.
+    if max_docs_per_batch == 0 {
+        return Err(Error::EmbedFailed(
+            "maxDocsPerBatch must be greater than 0".into(),
+        ));
+    }
+    if max_batch_bytes == 0 {
+        return Err(Error::EmbedFailed(
+            "maxBatchBytes must be greater than 0".into(),
+        ));
+    }
+
     if options.force {
         store.with_connection_mut(|c| clear_all_embeddings(c, collection))?;
     }

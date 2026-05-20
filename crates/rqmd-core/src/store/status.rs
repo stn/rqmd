@@ -137,6 +137,9 @@ pub fn get_index_health(conn: &Connection, model: &str) -> Result<IndexHealthInf
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collections::Collection;
+    use crate::store::embeddings::{ensure_vec_table, insert_embedding};
+    use crate::store::store_config::upsert_store_collection;
     use crate::store::Store;
     use rusqlite::params;
     use tempfile::NamedTempFile;
@@ -148,6 +151,17 @@ mod tests {
     }
 
     fn insert_doc(conn: &Connection, collection: &str, path: &str, hash: &str, modified_at: &str) {
+        insert_doc_active(conn, collection, path, hash, modified_at, 1);
+    }
+
+    fn insert_doc_active(
+        conn: &Connection,
+        collection: &str,
+        path: &str,
+        hash: &str,
+        modified_at: &str,
+        active: i64,
+    ) {
         conn.execute(
             "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?, ?, ?)",
             params![hash, format!("body of {hash}"), modified_at],
@@ -155,8 +169,8 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO documents (collection, path, title, hash, created_at, modified_at, active)
-             VALUES (?, ?, 'title', ?, ?, ?, 1)",
-            params![collection, path, hash, modified_at, modified_at],
+             VALUES (?, ?, 'title', ?, ?, ?, ?)",
+            params![collection, path, hash, modified_at, modified_at, active],
         )
         .unwrap();
     }
@@ -209,5 +223,144 @@ mod tests {
         assert_eq!(h.needs_embedding, 1);
         // 2020-01-01 → at least 4 years (1460 days) old by 2026.
         assert!(h.days_stale.unwrap() >= 1_460);
+    }
+
+    // --- ported from store.test.ts `describe("Index Status")` ---
+
+    #[test]
+    fn get_status_counts_only_active_documents() {
+        let (_t, store) = open_test_store();
+        insert_doc_active(
+            &store.conn,
+            "c",
+            "a.md",
+            "h1",
+            "2024-01-01T00:00:00.000Z",
+            1,
+        );
+        insert_doc_active(
+            &store.conn,
+            "c",
+            "b.md",
+            "h2",
+            "2024-01-01T00:00:00.000Z",
+            1,
+        );
+        insert_doc_active(
+            &store.conn,
+            "c",
+            "c.md",
+            "h3",
+            "2024-01-01T00:00:00.000Z",
+            0,
+        ); // inactive
+
+        let s = get_status(&store.conn, "m").unwrap();
+        assert_eq!(s.total_documents, 2); // only active
+    }
+
+    #[test]
+    fn get_status_reports_collection_info() {
+        let (_t, store) = open_test_store();
+        let coll = Collection {
+            path: "/test/path".to_string(),
+            pattern: "**/*.md".to_string(),
+            ignore: None,
+            context: None,
+            update: None,
+            include_by_default: None,
+        };
+        upsert_store_collection(&store.conn, "myapp", &coll).unwrap();
+        insert_doc(
+            &store.conn,
+            "myapp",
+            "doc1.md",
+            "h1",
+            "2024-01-01T00:00:00.000Z",
+        );
+
+        let s = get_status(&store.conn, "m").unwrap();
+        let col = s.collections.iter().find(|c| c.name == "myapp").unwrap();
+        assert_eq!(col.path.as_deref(), Some("/test/path"));
+        assert_eq!(col.pattern.as_deref(), Some("**/*.md"));
+        assert_eq!(col.documents, 1);
+    }
+
+    #[test]
+    fn get_hashes_needing_embedding_dedups_by_hash() {
+        let (_t, store) = open_test_store();
+        // doc1 + doc3 share hash h1; doc2 has h2 → 2 distinct hashes.
+        insert_doc(
+            &store.conn,
+            "c",
+            "doc1.md",
+            "h1",
+            "2024-01-01T00:00:00.000Z",
+        );
+        insert_doc(
+            &store.conn,
+            "c",
+            "doc2.md",
+            "h2",
+            "2024-01-01T00:00:00.000Z",
+        );
+        insert_doc(
+            &store.conn,
+            "c",
+            "doc3.md",
+            "h1",
+            "2024-01-01T00:00:00.000Z",
+        );
+
+        assert_eq!(
+            get_hashes_needing_embedding(&store.conn, None, "m").unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn embedding_health_scoped_to_active_model() {
+        let (_t, store) = open_test_store();
+        let active = "hf:active/embed-model.gguf";
+        let stale = "hf:stale/embed-model.gguf";
+        insert_doc(
+            &store.conn,
+            "c",
+            "doc1.md",
+            "hash1",
+            "2024-01-01T00:00:00.000Z",
+        );
+
+        ensure_vec_table(&store.conn, 3).unwrap();
+        // Embed hash1 only under the *stale* model.
+        insert_embedding(
+            &store.conn,
+            "hash1",
+            0,
+            0,
+            &[1.0, 2.0, 3.0],
+            stale,
+            "2024-01-01T00:00:00.000Z",
+            1,
+        )
+        .unwrap();
+
+        // Active model still sees hash1 as unembedded.
+        assert_eq!(
+            get_hashes_needing_embedding(&store.conn, None, active).unwrap(),
+            1
+        );
+        assert_eq!(get_status(&store.conn, active).unwrap().needs_embedding, 1);
+        assert_eq!(
+            get_index_health(&store.conn, active)
+                .unwrap()
+                .needs_embedding,
+            1
+        );
+        // Stale model: hash1 is complete.
+        assert_eq!(
+            get_hashes_needing_embedding(&store.conn, None, stale).unwrap(),
+            0
+        );
     }
 }

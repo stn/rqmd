@@ -75,8 +75,39 @@ async fn force_with_no_docs_returns_zero_and_clears_vectors_table() {
     assert_eq!(table_count, 0, "vectors_vec should have been dropped");
 }
 
+#[tokio::test]
+async fn rejects_invalid_batch_limits() {
+    let (_t, mut store) = open_store_empty();
+    let llm = ci_mode_llm();
+
+    let r = generate_embeddings(
+        &mut store,
+        llm.clone(),
+        StoreOpsEmbedOptions {
+            max_docs_per_batch: Some(0),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(format!("{}", r.unwrap_err()).contains("maxDocsPerBatch"));
+
+    let r = generate_embeddings(
+        &mut store,
+        llm,
+        StoreOpsEmbedOptions {
+            max_batch_bytes: Some(0),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(format!("{}", r.unwrap_err()).contains("maxBatchBytes"));
+}
+
 // NOTE: testing the happy path of `generate_embeddings` (multi-chunk
 // docs, sub-batch sequencing, fallback) requires a real GGUF — see the
 // `#[ignore]` integration tests for that. CI mode does NOT prevent the
 // single-chunk dim probe from running (only `embed_batch` is CI-gated),
-// so we cannot simulate the full pipeline without a real model.
+// so we cannot simulate the full pipeline without a real model. The
+// doc/byte batch-splitting logic is unit-tested in
+// `store_ops::embed::tests::build_embedding_batches_*`. Model-passthrough and
+// partial-multichunk parity are covered by the GGUF integration tests.

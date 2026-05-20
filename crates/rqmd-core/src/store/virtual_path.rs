@@ -2,6 +2,24 @@
 //!
 //! Port of the virtual-path utilities in `tobi/qmd`'s `src/store.ts`
 //! (lines 569–724).
+//!
+//! ## Intentional divergence from the TS API
+//!
+//! This module deliberately does NOT mirror the TS string-handling surface.
+//! The TS port recognised `//collection/path` (a `qmd:`-less shorthand) and
+//! encoded the index as a `?index=` query parameter, and its
+//! `normalizeVirtualPath` collapsed redundant slashes back to `qmd://`. The
+//! Rust port instead uses a typed two-scheme model:
+//!
+//! * canonical input `qmd://[index@]collection/path` (index via `index@`,
+//!   not `?index=`),
+//! * the equivalent `collection://path` shorthand, which is also the shape
+//!   [`normalize_virtual_path`] produces.
+//!
+//! As a result the TS-specific cases (`//collection/...`, `?index=...`,
+//! extra-slash collapsing, and treating bare/`~`/absolute/docid strings via
+//! this function) are out of scope here and are intentionally not ported as
+//! tests. Full TS-string compatibility is tracked as a separate follow-up.
 
 use std::path::{Path, PathBuf};
 
@@ -171,5 +189,45 @@ mod tests {
         assert!(is_virtual_path("qmd://a/b"));
         assert!(is_virtual_path("docs://a"));
         assert!(!is_virtual_path("/abs/path"));
+    }
+
+    #[test]
+    fn parse_nested_path() {
+        let vp = parse_virtual_path("qmd://archive/sub/folder/file.md").unwrap();
+        assert_eq!(vp.collection, "archive");
+        assert_eq!(vp.path, "sub/folder/file.md");
+        assert_eq!(vp.index_name, None);
+    }
+
+    #[test]
+    fn build_with_index_round_trips() {
+        let built = build_virtual_path("docs", "readme.md", Some("idx"));
+        assert_eq!(built, "qmd://idx@docs/readme.md");
+        let parsed = parse_virtual_path(&built).unwrap();
+        assert_eq!(parsed.collection, "docs");
+        assert_eq!(parsed.path, "readme.md");
+        assert_eq!(parsed.index_name.as_deref(), Some("idx"));
+    }
+
+    #[test]
+    fn normalize_canonicalises_to_collection_scheme() {
+        // qmd:// → collection:// shorthand.
+        assert_eq!(
+            normalize_virtual_path("qmd://docs/readme.md").unwrap(),
+            "docs://readme.md"
+        );
+        // Already-canonical collection:// is idempotent.
+        assert_eq!(
+            normalize_virtual_path("docs://readme.md").unwrap(),
+            "docs://readme.md"
+        );
+    }
+
+    #[test]
+    fn is_virtual_rejects_non_scheme_inputs() {
+        assert!(!is_virtual_path("readme.md"));
+        assert!(!is_virtual_path("collection/path.md"));
+        assert!(!is_virtual_path("~/Documents/file.md"));
+        assert!(!is_virtual_path("#abc123"));
     }
 }

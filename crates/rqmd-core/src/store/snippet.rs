@@ -231,4 +231,130 @@ mod tests {
         let out = add_line_numbers("a\nb", Some(10));
         assert_eq!(out, "10: a\n11: b");
     }
+
+    // --- extract_snippet: ported from store.test.ts `describe("Snippet Extraction")` ---
+
+    #[test]
+    fn snippet_includes_context_lines() {
+        let body = "Line 1\nLine 2\nLine 3 has keyword\nLine 4\nLine 5";
+        let r = extract_snippet(body, "keyword", Some(500), None, None, None);
+        assert!(r.snippet.contains("Line 2")); // context before
+        assert!(r.snippet.contains("Line 3 has keyword"));
+        assert!(r.snippet.contains("Line 4")); // context after
+    }
+
+    #[test]
+    fn snippet_respects_max_len_with_ellipsis() {
+        let body = "A".repeat(1000);
+        let r = extract_snippet(&body, "query", Some(100), None, None, None);
+        assert!(r.snippet.contains("@@")); // diff header
+        assert!(r.snippet.contains("...")); // content truncated
+    }
+
+    #[test]
+    fn snippet_uses_chunk_pos_hint() {
+        let body = "First section...\n".repeat(50) + "Target keyword here\n" + &"More content...".repeat(50);
+        let chunk_pos = body.find("Target keyword").unwrap();
+        let r = extract_snippet(&body, "Target", Some(200), Some(chunk_pos), None, None);
+        assert!(r.snippet.contains("Target keyword"));
+    }
+
+    #[test]
+    fn snippet_returns_beginning_when_no_match() {
+        let body = "First line\nSecond line\nThird line";
+        let r = extract_snippet(body, "nonexistent", Some(500), None, None, None);
+        assert_eq!(r.line, 1);
+        assert!(r.snippet.contains("First line"));
+    }
+
+    #[test]
+    fn snippet_includes_diff_style_header() {
+        let body = "Line 1\nLine 2\nLine 3 has keyword\nLine 4\nLine 5";
+        let r = extract_snippet(body, "keyword", Some(500), None, None, None);
+        assert!(r.snippet.starts_with("@@ -2,4 @@ (1 before, 0 after)"));
+        assert_eq!(r.lines_before, 1);
+        assert_eq!(r.lines_after, 0);
+        assert_eq!(r.snippet_lines, 4);
+    }
+
+    #[test]
+    fn snippet_calculates_lines_before_after() {
+        let body = "L1\nL2\nL3\nL4 match\nL5\nL6\nL7\nL8\nL9\nL10";
+        let r = extract_snippet(body, "match", Some(500), None, None, None);
+        assert_eq!(r.line, 4);
+        assert_eq!(r.lines_before, 2);
+        assert_eq!(r.snippet_lines, 4);
+        assert_eq!(r.lines_after, 4);
+    }
+
+    #[test]
+    fn snippet_header_format_values() {
+        let body = "A\nB\nC keyword\nD\nE\nF\nG\nH";
+        let r = extract_snippet(body, "keyword", Some(500), None, None, None);
+        assert!(r.snippet.starts_with("@@ -2,4 @@ (1 before, 3 after)"));
+    }
+
+    #[test]
+    fn snippet_at_document_start_shows_zero_before() {
+        let body = "First line keyword\nSecond\nThird\nFourth\nFifth";
+        let r = extract_snippet(body, "keyword", Some(500), None, None, None);
+        assert_eq!(r.line, 1);
+        assert_eq!(r.lines_before, 0);
+        assert_eq!(r.snippet_lines, 3);
+        assert_eq!(r.lines_after, 2);
+    }
+
+    #[test]
+    fn snippet_at_document_end_shows_zero_after() {
+        let body = "First\nSecond\nThird\nFourth\nFifth keyword";
+        let r = extract_snippet(body, "keyword", Some(500), None, None, None);
+        assert_eq!(r.line, 5);
+        assert_eq!(r.lines_before, 3);
+        assert_eq!(r.snippet_lines, 2);
+        assert_eq!(r.lines_after, 0);
+    }
+
+    #[test]
+    fn snippet_single_line_document() {
+        let body = "Single line with keyword";
+        let r = extract_snippet(body, "keyword", Some(500), None, None, None);
+        assert_eq!(r.lines_before, 0);
+        assert_eq!(r.lines_after, 0);
+        assert_eq!(r.snippet_lines, 1);
+        assert!(r.snippet.contains("@@ -1,1 @@ (0 before, 0 after)"));
+        assert!(r.snippet.contains("Single line with keyword"));
+    }
+
+    #[test]
+    fn snippet_chunk_pos_adjusts_line_numbers() {
+        let padding = "Padding line\n".repeat(50);
+        let body = padding.clone() + "Target keyword here\nMore content\nEven more";
+        let chunk_pos = padding.len();
+        let r = extract_snippet(&body, "keyword", Some(200), Some(chunk_pos), None, None);
+        assert_eq!(r.line, 51);
+        assert!(r.lines_before > 40);
+    }
+
+    #[test]
+    fn snippet_anchors_on_chunk_pos_when_no_lexical_match() {
+        // A quoted-phrase query tokenises into terms with embedded quotes that
+        // never appear in the body; the fallback anchors on chunk_pos.
+        let pad_line = "Lorem ipsum dolor sit amet\n";
+        let padding = pad_line.repeat(100);
+        let body = format!("{padding}chunk content here\nmore chunk content\n{padding}");
+        let chunk_pos = padding.len();
+        let r = extract_snippet(&body, "\"unrelated quoted phrase\"", Some(200), Some(chunk_pos), None, None);
+        assert!(r.line > 50);
+        assert!(r.line < 110);
+    }
+
+    #[test]
+    fn snippet_chunk_pos_zero_falls_back_to_full_scan() {
+        // chunk_pos=0 may be the bestIdx=0 default rather than a real chunk-0
+        // hit, so the fallback must consider matches outside chunk 0.
+        let padding = "Lorem ipsum dolor sit amet\n".repeat(200);
+        let body = format!("{padding}TARGET_KEYWORD line content\ntail line\n");
+        let r = extract_snippet(&body, "TARGET_KEYWORD", Some(200), Some(0), None, None);
+        assert_eq!(r.line, 201);
+    }
 }

@@ -233,3 +233,33 @@ async fn structured_search_first_list_gets_2x_weight() {
         "first list (lex/alpha) should outrank second (vec/gamma); got order {r:?}"
     );
 }
+
+/// Ported from store.test.ts: "hybrid RRF weights boost original vector
+/// evidence over expansion-only hits". `get_hybrid_rrf_weights` assigns 2.0
+/// to original-query lists and 1.0 to expansion lists, regardless of source.
+#[test]
+fn get_hybrid_rrf_weights_boosts_original_query_lists() {
+    use rqmd_core::store::rrf::{QueryType, RankedListMeta};
+    use rqmd_core::store::search::SearchSource;
+    use rqmd_core::store_ops::hybrid::get_hybrid_rrf_weights;
+
+    let meta = vec![
+        RankedListMeta {
+            source: SearchSource::Fts,
+            query_type: QueryType::Original,
+            query: "user query".into(),
+        },
+        RankedListMeta {
+            source: SearchSource::Fts,
+            query_type: QueryType::Lex,
+            query: "lex expansion".into(),
+        },
+        RankedListMeta {
+            source: SearchSource::Vec,
+            query_type: QueryType::Original,
+            query: "user query".into(),
+        },
+    ];
+
+    assert_eq!(get_hybrid_rrf_weights(&meta), vec![2.0, 1.0, 2.0]);
+}
