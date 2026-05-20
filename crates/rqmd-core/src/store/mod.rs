@@ -78,6 +78,9 @@ pub enum Error {
     #[error("invalid virtual path: '{0}'")]
     InvalidVirtualPath(String),
 
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
+
     #[error("invalid glob pattern: '{0}'")]
     InvalidGlob(String),
 

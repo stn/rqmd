@@ -111,14 +111,17 @@ pub fn reindex_collection(
     let mut seen: HashSet<String> = HashSet::new();
 
     for (abs, rel_str) in files {
-        let Some(path_key) = handelize(&rel_str) else {
-            processed += 1;
-            on_progress(&ReindexProgress {
-                file: rel_str.clone(),
-                current: processed,
-                total,
-            });
-            continue;
+        let path_key = match handelize(&rel_str) {
+            Ok(k) => k,
+            Err(_) => {
+                processed += 1;
+                on_progress(&ReindexProgress {
+                    file: rel_str.clone(),
+                    current: processed,
+                    total,
+                });
+                continue;
+            }
         };
         seen.insert(path_key.clone());
 

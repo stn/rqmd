@@ -11,7 +11,7 @@ use rusqlite::{types::Value, Connection};
 
 use super::context::get_context_for_file;
 use super::docid::get_docid;
-use super::schema::{contains_cjk, sanitize_fts5_phrase};
+use super::schema::{contains_cjk, sanitize_fts5_phrase, sanitize_fts5_term};
 use super::{Error, Result};
 
 // ============================================================================
@@ -160,7 +160,7 @@ pub(crate) fn build_fts5_query(query: &str) -> Option<String> {
                     }
                 }
             } else {
-                let sanitised = sanitise_term_alnum(term);
+                let sanitised = sanitize_fts5_term(term);
                 if !sanitised.is_empty() {
                     let q = format!("\"{sanitised}\"*");
                     if negated {
@@ -203,29 +203,11 @@ fn is_hyphenated_token(term: &str) -> bool {
 
 fn sanitize_hyphenated(term: &str) -> String {
     term.split('-')
-        .map(sanitise_term_alnum)
+        .map(sanitize_fts5_term)
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
 }
-
-/// Stricter term sanitiser that mirrors TS `sanitizeFTS5Term`
-/// (`store.ts:3016–3018`): keep letters/digits/`'`/`_`, lowercase the rest.
-/// `super::schema::sanitize_fts5_term` is the *quoting* helper; this one is
-/// the *content* filter.
-fn sanitise_term_alnum(term: &str) -> String {
-    let mut out = String::with_capacity(term.len());
-    for ch in term.chars() {
-        if ch.is_alphanumeric() || ch == '\'' || ch == '_' {
-            out.extend(ch.to_lowercase());
-        }
-    }
-    out
-}
-
-// Re-export the quoting helper under the original TS name for callers
-// that want to escape a single term verbatim.
-pub use super::schema::sanitize_fts5_term as quote_fts5_term;
 
 // ============================================================================
 // validateLexQuery / validateSemanticQuery (refined from schema.rs stubs)

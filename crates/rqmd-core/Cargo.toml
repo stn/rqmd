@@ -16,6 +16,11 @@ rusqlite     = { workspace = true }
 sqlite-vec   = { workspace = true }
 sha2         = "0.10"
 regex        = "1"
+# Unicode general-category lookup (unicode-rs). Used by `store::schema`'s
+# `sanitize_fts5_term` to match TS `\p{L}` / `\p{N}` exactly — `char::
+# is_alphanumeric()` is broader (it includes `Other_Alphabetic` combining
+# marks) and would diverge from the TS content filter.
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 ignore       = "0.4"
 globset      = "0.4"
 # WHATWG `application/x-www-form-urlencoded` parser — matches JS

@@ -383,6 +383,61 @@ pub fn days_since_rfc3339(then_rfc3339: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    /// Env vars that the path helpers consult. Saved/restored wholesale by
+    /// [`EnvGuard`] so env-mutating tests (all `#[serial]`) cannot leak state.
+    const ENV_KEYS: &[&str] = &["PWD", "WSL_DISTRO_NAME", "WSL_INTEROP", "HOME", "RQMD_INDEX_PATH"];
+
+    /// RAII guard that snapshots `ENV_KEYS` on construction and restores them
+    /// on drop — even if the test panics. `set`/`unset` mutate the process
+    /// environment (`unsafe` since Rust 2024). Pair with `#[serial]`.
+    ///
+    /// Invariant: only ever `set`/`unset` keys listed in [`ENV_KEYS`].
+    /// Anything outside that set is not snapshotted and would therefore leak
+    /// past the guard's `Drop`. (All current call sites honour this.)
+    struct EnvGuard(Vec<(&'static str, Option<String>)>);
+
+    impl EnvGuard {
+        fn new() -> Self {
+            EnvGuard(ENV_KEYS.iter().map(|k| (*k, std::env::var(k).ok())).collect())
+        }
+        fn set(&self, k: &str, v: &str) {
+            unsafe { std::env::set_var(k, v) };
+        }
+        fn unset(&self, k: &str) {
+            unsafe { std::env::remove_var(k) };
+        }
+        /// PWD set to `pwd`, WSL detection vars cleared — the common setup for
+        /// `resolve` tests.
+        fn with_pwd_no_wsl(pwd: &str) -> Self {
+            let g = Self::new();
+            g.set("PWD", pwd);
+            g.unset("WSL_DISTRO_NAME");
+            g.unset("WSL_INTEROP");
+            g
+        }
+        /// WSL detection vars cleared (for Git-Bash drive resolution).
+        fn no_wsl() -> Self {
+            let g = Self::new();
+            g.unset("WSL_DISTRO_NAME");
+            g.unset("WSL_INTEROP");
+            g
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.0 {
+                unsafe {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn is_absolute_unix() {
@@ -460,5 +515,507 @@ mod tests {
         // Out-of-range month/day.
         assert_eq!(parse_rfc3339_to_epoch_days("2024-13-01"), None);
         assert_eq!(parse_rfc3339_to_epoch_days("2024-00-01"), None);
+    }
+
+    // ========================================================================
+    // Ported from store-paths.test.ts
+    // ========================================================================
+
+    // ---- isAbsolutePath ----
+
+    // NOTE: `is_absolute_path` reads the WSL env vars (via `is_wsl`) for any
+    // leading-slash input, so these are `#[serial]` even though they only read
+    // — env access races with the env-mutating `#[serial]` tests below, which
+    // is UB under edition 2024 (the reason `set_var` is `unsafe`).
+    #[test]
+    #[serial]
+    fn is_absolute_path_unix_absolute() {
+        assert!(is_absolute_path("/path/to/file"));
+        assert!(is_absolute_path("/"));
+        assert!(is_absolute_path("/home/user/documents"));
+        assert!(is_absolute_path("/usr/local/bin"));
+    }
+
+    #[test]
+    fn is_absolute_path_unix_relative() {
+        assert!(!is_absolute_path("path/to/file"));
+        assert!(!is_absolute_path("./path/to/file"));
+        assert!(!is_absolute_path("../path/to/file"));
+        assert!(!is_absolute_path("./file"));
+        assert!(!is_absolute_path("../file"));
+        assert!(!is_absolute_path("file.txt"));
+    }
+
+    #[test]
+    fn is_absolute_path_windows_forward_slash() {
+        assert!(is_absolute_path("C:/path/to/file"));
+        assert!(is_absolute_path("C:/"));
+        assert!(is_absolute_path("D:/Users/Documents"));
+        assert!(is_absolute_path("Z:/"));
+        assert!(is_absolute_path("c:/lowercase"));
+    }
+
+    #[test]
+    fn is_absolute_path_windows_backslash() {
+        assert!(is_absolute_path("C:\\path\\to\\file"));
+        assert!(is_absolute_path("C:\\"));
+        assert!(is_absolute_path("D:\\Users\\Documents"));
+        assert!(is_absolute_path("Z:\\"));
+        assert!(is_absolute_path("c:\\lowercase"));
+    }
+
+    #[test]
+    fn is_absolute_path_windows_relative() {
+        assert!(!is_absolute_path("path\\to\\file"));
+        assert!(!is_absolute_path(".\\path\\to\\file"));
+        assert!(!is_absolute_path("..\\path\\to\\file"));
+        assert!(!is_absolute_path(".\\file"));
+        assert!(!is_absolute_path("..\\file"));
+        assert!(!is_absolute_path("file.txt"));
+    }
+
+    #[test]
+    #[serial]
+    fn is_absolute_path_git_bash() {
+        // Returns true for any leading-slash path regardless of WSL detection.
+        assert!(is_absolute_path("/c/Users/name/file"));
+        assert!(is_absolute_path("/C/Users/name/file"));
+        assert!(is_absolute_path("/d/Projects"));
+        assert!(is_absolute_path("/D/Projects"));
+        assert!(is_absolute_path("/z/"));
+    }
+
+    #[test]
+    #[serial]
+    fn is_absolute_path_edge_cases() {
+        assert!(!is_absolute_path(""));
+        assert!(is_absolute_path("C:")); // drive letter only
+        assert!(!is_absolute_path("C")); // just a letter
+        assert!(!is_absolute_path(":"));
+        assert!(is_absolute_path("/a")); // short Unix path
+        assert!(is_absolute_path("/1/")); // number after slash (not Git Bash)
+    }
+
+    // ---- normalizePathSeparators ----
+
+    #[test]
+    fn normalize_path_separators_backslashes() {
+        assert_eq!(
+            normalize_path_separators("C:\\Users\\name\\file.txt"),
+            "C:/Users/name/file.txt"
+        );
+        assert_eq!(
+            normalize_path_separators("D:\\Projects\\qmd\\src"),
+            "D:/Projects/qmd/src"
+        );
+        assert_eq!(normalize_path_separators("\\path\\to\\file"), "/path/to/file");
+    }
+
+    #[test]
+    fn normalize_path_separators_mixed() {
+        assert_eq!(
+            normalize_path_separators("C:\\Users/name\\file.txt"),
+            "C:/Users/name/file.txt"
+        );
+        assert_eq!(
+            normalize_path_separators("path\\to/file/here"),
+            "path/to/file/here"
+        );
+    }
+
+    #[test]
+    fn normalize_path_separators_unix_unchanged() {
+        assert_eq!(normalize_path_separators("/path/to/file"), "/path/to/file");
+        assert_eq!(normalize_path_separators("/usr/local/bin"), "/usr/local/bin");
+        assert_eq!(normalize_path_separators("relative/path"), "relative/path");
+    }
+
+    #[test]
+    fn normalize_path_separators_consecutive() {
+        assert_eq!(normalize_path_separators("path\\\\to\\\\file"), "path//to//file");
+        assert_eq!(normalize_path_separators("C:\\\\Users\\\\name"), "C://Users//name");
+    }
+
+    #[test]
+    fn normalize_path_separators_edge_cases() {
+        assert_eq!(normalize_path_separators(""), "");
+        assert_eq!(normalize_path_separators("\\"), "/");
+        assert_eq!(normalize_path_separators("\\\\"), "//");
+        assert_eq!(normalize_path_separators("file.txt"), "file.txt");
+    }
+
+    // ---- getRelativePathFromPrefix ----
+
+    #[test]
+    fn get_relative_path_from_prefix_exact_match() {
+        assert_eq!(get_relative_path_from_prefix("/home/user", "/home/user"), Some(String::new()));
+        assert_eq!(get_relative_path_from_prefix("C:/Users/name", "C:/Users/name"), Some(String::new()));
+        assert_eq!(get_relative_path_from_prefix("/path", "/path"), Some(String::new()));
+    }
+
+    #[test]
+    fn get_relative_path_from_prefix_under_prefix() {
+        assert_eq!(
+            get_relative_path_from_prefix("/home/user/documents", "/home/user"),
+            Some("documents".into())
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("/home/user/documents/file.txt", "/home/user"),
+            Some("documents/file.txt".into())
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("C:/Users/name/Documents/file.txt", "C:/Users/name"),
+            Some("Documents/file.txt".into())
+        );
+    }
+
+    #[test]
+    fn get_relative_path_from_prefix_not_under() {
+        assert_eq!(get_relative_path_from_prefix("/home/other", "/home/user"), None);
+        assert_eq!(get_relative_path_from_prefix("/usr/local", "/home/user"), None);
+        assert_eq!(get_relative_path_from_prefix("C:/Users/other", "D:/Users"), None);
+    }
+
+    #[test]
+    fn get_relative_path_from_prefix_windows_normalized() {
+        assert_eq!(
+            get_relative_path_from_prefix("C:\\Users\\name\\Documents", "C:\\Users\\name"),
+            Some("Documents".into())
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("C:\\Users\\name\\Documents\\file.txt", "C:/Users/name"),
+            Some("Documents/file.txt".into())
+        );
+    }
+
+    #[test]
+    fn get_relative_path_from_prefix_trailing_slash() {
+        assert_eq!(
+            get_relative_path_from_prefix("/home/user/documents", "/home/user/"),
+            Some("documents".into())
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("C:/Users/name/Documents", "C:/Users/name/"),
+            Some("Documents".into())
+        );
+    }
+
+    #[test]
+    fn get_relative_path_from_prefix_no_trailing_slash() {
+        assert_eq!(
+            get_relative_path_from_prefix("/home/user/documents", "/home/user"),
+            Some("documents".into())
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("C:/Users/name/Documents", "C:/Users/name"),
+            Some("Documents".into())
+        );
+    }
+
+    #[test]
+    fn get_relative_path_from_prefix_edge_cases() {
+        // Empty prefix.
+        assert_eq!(get_relative_path_from_prefix("/path/to/file", ""), None);
+        // Substring but not in hierarchy.
+        assert_eq!(get_relative_path_from_prefix("/home/username", "/home/user"), None);
+        // Root prefix.
+        assert_eq!(get_relative_path_from_prefix("/home/user", "/"), Some("home/user".into()));
+    }
+
+    // ---- resolve: Unix ----
+
+    #[test]
+    #[serial]
+    fn resolve_unix_relative_paths() {
+        let _g = EnvGuard::with_pwd_no_wsl("/home/user");
+        assert_eq!(resolve(&["/base", "relative"]), "/base/relative");
+        assert_eq!(resolve(&["/base", "a/b/c"]), "/base/a/b/c");
+        assert_eq!(resolve(&["/home", "user/documents"]), "/home/user/documents");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_unix_absolute_paths() {
+        let _g = EnvGuard::with_pwd_no_wsl("/home/user");
+        assert_eq!(resolve(&["/base", "/absolute"]), "/absolute");
+        assert_eq!(resolve(&["/home/user", "/usr/local"]), "/usr/local");
+        assert_eq!(resolve(&["/any", "/"]), "/");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_unix_dot_and_dotdot() {
+        let _g = EnvGuard::with_pwd_no_wsl("/home/user");
+        assert_eq!(resolve(&["/base", "../other"]), "/other");
+        assert_eq!(resolve(&["/base/sub", ".."]), "/base");
+        assert_eq!(resolve(&["/base", "./file"]), "/base/file");
+        assert_eq!(resolve(&["/base/a/b", "../../c"]), "/base/c");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_unix_multiple_segments() {
+        let _g = EnvGuard::with_pwd_no_wsl("/home/user");
+        assert_eq!(resolve(&["/a", "b", "c"]), "/a/b/c");
+        assert_eq!(resolve(&["/a", "b", "../c"]), "/a/c");
+        assert_eq!(resolve(&["/a", "b", "/c"]), "/c");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_unix_relative_without_base_uses_pwd() {
+        let _g = EnvGuard::with_pwd_no_wsl("/home/user");
+        assert_eq!(resolve(&["relative"]), "/home/user/relative");
+        assert_eq!(resolve(&["a/b/c"]), "/home/user/a/b/c");
+        assert_eq!(resolve(&["./file"]), "/home/user/file");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_unix_absolute_alone() {
+        let _g = EnvGuard::with_pwd_no_wsl("/home/user");
+        assert_eq!(resolve(&["/absolute/path"]), "/absolute/path");
+        assert_eq!(resolve(&["/"]), "/");
+    }
+
+    // ---- resolve: Windows ----
+
+    #[test]
+    #[serial]
+    fn resolve_windows_relative_paths() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["C:/base", "relative"]), "C:/base/relative");
+        assert_eq!(resolve(&["C:/base", "a/b/c"]), "C:/base/a/b/c");
+        assert_eq!(resolve(&["D:/Projects", "qmd/src"]), "D:/Projects/qmd/src");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_windows_absolute_paths() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["C:/base", "D:/other"]), "D:/other");
+        assert_eq!(resolve(&["C:/Users", "C:/Program Files"]), "C:/Program Files");
+        assert_eq!(resolve(&["D:/any", "E:/other"]), "E:/other");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_windows_backslashes() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["C:\\base", "relative"]), "C:/base/relative");
+        assert_eq!(resolve(&["C:\\Users\\name", "Documents"]), "C:/Users/name/Documents");
+        assert_eq!(resolve(&["C:\\base", "a\\b\\c"]), "C:/base/a/b/c");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_windows_dot_and_dotdot() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["C:/base", "../other"]), "C:/other");
+        assert_eq!(resolve(&["C:/base/sub", ".."]), "C:/base");
+        assert_eq!(resolve(&["C:/base", "./file"]), "C:/base/file");
+        assert_eq!(resolve(&["C:/base/a/b", "../../c"]), "C:/base/c");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_windows_multiple_segments() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["C:/a", "b", "c"]), "C:/a/b/c");
+        assert_eq!(resolve(&["C:/a", "b", "../c"]), "C:/a/c");
+        assert_eq!(resolve(&["C:/a", "b", "D:/c"]), "D:/c");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_windows_relative_without_base_uses_pwd() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["relative"]), "C:/Users/name/relative");
+        assert_eq!(resolve(&["a/b/c"]), "C:/Users/name/a/b/c");
+        assert_eq!(resolve(&[".\\file"]), "C:/Users/name/file");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_windows_drive_letter_only() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["C:"]), "C:/");
+        assert_eq!(resolve(&["D:"]), "D:/");
+    }
+
+    // ---- resolve: Git Bash ----
+
+    #[test]
+    #[serial]
+    fn resolve_git_bash_to_windows() {
+        let _g = EnvGuard::no_wsl();
+        assert_eq!(resolve(&["/c/Users/name"]), "C:/Users/name");
+        assert_eq!(resolve(&["/C/Users/name"]), "C:/Users/name");
+        assert_eq!(resolve(&["/d/Projects"]), "D:/Projects");
+        assert_eq!(resolve(&["/D/Projects"]), "D:/Projects");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_git_bash_relative() {
+        let _g = EnvGuard::no_wsl();
+        assert_eq!(resolve(&["/c/base", "relative"]), "C:/base/relative");
+        assert_eq!(resolve(&["/d/Projects", "qmd/src"]), "D:/Projects/qmd/src");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_git_bash_dot_and_dotdot() {
+        let _g = EnvGuard::no_wsl();
+        assert_eq!(resolve(&["/c/base", "../other"]), "C:/other");
+        assert_eq!(resolve(&["/c/base/sub", ".."]), "C:/base");
+        assert_eq!(resolve(&["/c/base", "./file"]), "C:/base/file");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_git_bash_multiple_segments() {
+        let _g = EnvGuard::no_wsl();
+        assert_eq!(resolve(&["/c/a", "b", "c"]), "C:/a/b/c");
+        assert_eq!(resolve(&["/c/a", "b", "/d/c"]), "D:/c");
+    }
+
+    // ---- resolve: edge cases ----
+
+    // The `resolve_edge_*` cases use absolute first args (no PWD lookup) but
+    // still reach `is_wsl` via `is_absolute_path`/`take_git_bash_drive`, so
+    // they must be `#[serial]` alongside the env-mutating tests. Their outputs
+    // are env-independent, hence no `EnvGuard` is needed.
+    #[test]
+    #[serial]
+    fn resolve_edge_empty_segments_filtered() {
+        assert_eq!(resolve(&["/base", "", "file"]), "/base/file");
+        assert_eq!(resolve(&["C:/base", "", "file"]), "C:/base/file");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_edge_multiple_consecutive_slashes() {
+        assert_eq!(resolve(&["/base//path///file"]), "/base/path/file");
+        assert_eq!(resolve(&["C:/base//path///file"]), "C:/base/path/file");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_edge_trailing_slashes() {
+        assert_eq!(resolve(&["/base/", "file"]), "/base/file");
+        assert_eq!(resolve(&["C:/base/", "file"]), "C:/base/file");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_edge_complex_dotdot() {
+        assert_eq!(resolve(&["/a/b/c/d", "../../../e"]), "/a/e");
+        assert_eq!(resolve(&["C:/a/b/c/d", "../../../e"]), "C:/a/e");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_edge_too_many_dotdot() {
+        assert_eq!(resolve(&["/base", "../../../../other"]), "/other");
+        assert_eq!(resolve(&["C:/base", "../../../../other"]), "C:/other");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_edge_mixed_unix_and_windows() {
+        let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
+        assert_eq!(resolve(&["/unix/path"]), "/unix/path");
+        assert_eq!(resolve(&["relative"]), "C:/Users/name/relative");
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one path segment is required")]
+    fn resolve_edge_no_arguments_panics() {
+        let _ = resolve(&[]);
+    }
+
+    // ========================================================================
+    // Ported from store.helpers.unit.test.ts — Path Utilities
+    // ========================================================================
+
+    #[test]
+    #[serial]
+    fn homedir_returns_home_env() {
+        let g = EnvGuard::new();
+        g.set("HOME", "/home/testuser");
+        assert_eq!(homedir(), PathBuf::from("/home/testuser"));
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_handles_absolute_paths() {
+        let _g = EnvGuard::no_wsl();
+        assert_eq!(resolve(&["/foo/bar"]), "/foo/bar");
+        assert_eq!(resolve(&["/foo", "/bar"]), "/bar");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_handles_relative_paths() {
+        let _g = EnvGuard::with_pwd_no_wsl("/work");
+        assert_eq!(resolve(&["foo"]), "/work/foo");
+        assert_eq!(resolve(&["foo", "bar"]), "/work/foo/bar");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_normalizes_dot_and_dotdot() {
+        let _g = EnvGuard::no_wsl();
+        assert_eq!(resolve(&["/foo/bar/./baz"]), "/foo/bar/baz");
+        assert_eq!(resolve(&["/foo/bar/../baz"]), "/foo/baz");
+        assert_eq!(resolve(&["/foo/bar/../../baz"]), "/baz");
+    }
+
+    #[test]
+    #[serial]
+    fn default_db_path_errs_in_test_mode_without_index_path() {
+        let g = EnvGuard::new();
+        g.unset("RQMD_INDEX_PATH");
+        // Reset production mode in case another test enabled it (the flag is
+        // a process-global AtomicBool).
+        _reset_production_mode_for_testing();
+        assert!(matches!(default_db_path(None), Err(Error::DbPathNotSet)));
+    }
+
+    #[test]
+    #[serial]
+    fn default_db_path_uses_index_path_when_set() {
+        let g = EnvGuard::new();
+        g.set("RQMD_INDEX_PATH", "/tmp/test-index.sqlite");
+        // RQMD_INDEX_PATH takes precedence regardless of index name / mode.
+        assert_eq!(default_db_path(None).unwrap(), PathBuf::from("/tmp/test-index.sqlite"));
+        assert_eq!(
+            default_db_path(Some("custom")).unwrap(),
+            PathBuf::from("/tmp/test-index.sqlite")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn pwd_returns_current_working_directory() {
+        let g = EnvGuard::new();
+        g.set("PWD", "/some/working/dir");
+        let p = pwd();
+        assert!(!p.as_os_str().is_empty());
+        assert_eq!(p, PathBuf::from("/some/working/dir"));
+    }
+
+    // `std::env::temp_dir()` reads `TMPDIR`/`TEMP`/`TMP`; an env *read* still
+    // races with the env-mutating `#[serial]` tests (the `environ` array is
+    // shared), so this is serial too.
+    #[test]
+    #[serial]
+    fn real_path_resolves_existing_directory() {
+        let tmp = std::env::temp_dir();
+        let resolved = real_path(&tmp);
+        let expected = std::fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.clone());
+        assert_eq!(resolved, expected);
+        assert!(resolved.exists());
     }
 }

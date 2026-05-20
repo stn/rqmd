@@ -109,6 +109,56 @@ fn search_fts_handles_cjk_query() {
     assert!(hits.iter().any(|h| h.doc.display_path == "docs/ja.md"));
 }
 
+/// Regression: CJK queries containing punctuation (、。「」 etc.) must not
+/// produce a malformed FTS5 MATCH. After unifying on the TS-equivalent
+/// *content filter* (`sanitize_fts5_term`), punctuation is stripped (matching
+/// TS `sanitizeFTS5Phrase`) rather than quoted, so the query still parses and
+/// the surrounding CJK characters still match.
+#[test]
+fn search_fts_handles_cjk_query_with_punctuation() {
+    let tmp = NamedTempFile::new().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+
+    // Body has the contiguous run 日本語テスト (the CJK character tokenizer
+    // turns it into adjacent single-char tokens).
+    insert(&store, "docs", "ja.md", "日本語", "これは日本語テストです");
+    insert(
+        &store,
+        "docs",
+        "en.md",
+        "English",
+        "this is an English test",
+    );
+
+    // The 、 must be sanitised away; the remaining 日本語テスト forms a phrase
+    // that matches the contiguous run in the document.
+    let hits = store
+        .with_connection(|c| search_fts(c, "日本語、テスト", Some(10), None))
+        .unwrap();
+    assert!(
+        hits.iter().any(|h| h.doc.display_path == "docs/ja.md"),
+        "expected CJK match despite punctuation in query"
+    );
+}
+
+/// Regression: a quoted phrase containing FTS5-special characters must not
+/// produce a malformed MATCH. The removed quoting helper would map `c++` to
+/// `"c++"` and then re-wrap the whole phrase, yielding `""c++" code"` (a
+/// syntax error); the content filter strips `+` so the phrase parses cleanly.
+#[test]
+fn search_fts_handles_quoted_phrase_with_special_chars() {
+    let tmp = NamedTempFile::new().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+
+    insert(&store, "docs", "a.md", "Doc", "learning c code is fun");
+
+    // Quoted phrase with `+` — must sanitise to a valid query without error.
+    let hits = store
+        .with_connection(|c| search_fts(c, "\"c++ code\"", Some(10), None))
+        .unwrap();
+    assert!(hits.iter().any(|h| h.doc.display_path == "docs/a.md"));
+}
+
 #[test]
 fn search_fts_supports_negation() {
     let tmp = NamedTempFile::new().unwrap();

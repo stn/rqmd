@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use rusqlite::Connection;
+use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
 use super::Result;
 
@@ -52,30 +53,42 @@ pub fn contains_cjk(text: &str) -> bool {
     CJK_CHAR.is_match(text)
 }
 
-/// Escape FTS5 special characters in a single search term.
+/// Sanitise a single FTS5 search term to safe *content*: keep Unicode
+/// letters (`\p{L}`), numbers (`\p{N}`), `'`, and `_`; drop everything else;
+/// lowercase.
 ///
-/// FTS5 reserves: `" ( ) * + - : ^` and treats `AND` / `OR` / `NOT` /
-/// `NEAR` as operators in bareword context. We quote any term that
-/// contains a special character, escaping interior `"` by doubling.
+/// Mirrors TS `sanitizeFTS5Term` (`store.ts:3016–3018`):
+/// `term.replace(/[^\p{L}\p{N}'_]/gu, '').toLowerCase()`. The keep set is
+/// decided by Unicode *general category* (via `unicode-properties`) rather
+/// than `char::is_alphanumeric()` — the latter also matches
+/// `Other_Alphabetic` combining marks (e.g. Indic vowel signs), which `\p{L}`
+/// excludes, so it would silently diverge from the TS filter.
+///
+/// Because every FTS5 special character is removed here, callers can safely
+/// wrap the result in `"..."` themselves (see
+/// [`crate::store::search::build_fts5_query`]) with no quote-escaping needed.
+/// There is intentionally **no** "quoting" variant — TS qmd has none, and an
+/// earlier quote-based helper diverged from it.
 pub fn sanitize_fts5_term(term: &str) -> String {
-    if term.is_empty() {
-        return String::new();
+    let mut out = String::with_capacity(term.len());
+    for ch in term.chars() {
+        let keep = ch == '\''
+            || ch == '_'
+            || matches!(
+                ch.general_category_group(),
+                GeneralCategoryGroup::Letter | GeneralCategoryGroup::Number
+            );
+        if keep {
+            out.extend(ch.to_lowercase());
+        }
     }
-    let needs_quoting = term.chars().any(|c| {
-        matches!(
-            c,
-            '"' | '(' | ')' | '*' | '+' | '-' | ':' | '^' | ' ' | '\t' | '\n'
-        )
-    }) || matches!(term, "AND" | "OR" | "NOT" | "NEAR");
-    if needs_quoting {
-        let escaped = term.replace('"', "\"\"");
-        format!("\"{escaped}\"")
-    } else {
-        term.to_string()
-    }
+    out
 }
 
-/// Escape an FTS5 phrase composed of multiple terms.
+/// Sanitise an FTS5 phrase: CJK-normalise, then map each whitespace-delimited
+/// token through [`sanitize_fts5_term`] and re-join with single spaces.
+///
+/// Mirrors TS `sanitizeFTS5Phrase` (`store.ts:756–762`).
 pub fn sanitize_fts5_phrase(phrase: &str) -> String {
     let normalised = normalize_cjk_for_fts(phrase);
     normalised
@@ -355,13 +368,52 @@ mod tests {
         assert!(contains_cjk("hello 日本"));
     }
 
+    // --- sanitize_fts5_term: ported from store.helpers.unit.test.ts
+    //     `describe("sanitizeFTS5Term")` (content filter, mirrors TS exactly) ---
+
     #[test]
-    fn sanitize_fts5_term_quotes_specials() {
-        assert_eq!(sanitize_fts5_term("hello"), "hello");
-        assert_eq!(sanitize_fts5_term("a b"), "\"a b\"");
-        assert_eq!(sanitize_fts5_term("c++"), "\"c++\"");
-        assert_eq!(sanitize_fts5_term("\""), "\"\"\"\"");
-        assert_eq!(sanitize_fts5_term("AND"), "\"AND\"");
-        assert_eq!(sanitize_fts5_term(""), "");
+    fn sanitize_fts5_term_preserves_snake_case_underscores() {
+        assert_eq!(sanitize_fts5_term("my_variable"), "my_variable");
+        assert_eq!(sanitize_fts5_term("MAX_RETRIES"), "max_retries");
+        assert_eq!(sanitize_fts5_term("__init__"), "__init__");
+    }
+
+    #[test]
+    fn sanitize_fts5_term_preserves_alphanumeric() {
+        assert_eq!(sanitize_fts5_term("hello123"), "hello123");
+        assert_eq!(sanitize_fts5_term("test"), "test");
+    }
+
+    #[test]
+    fn sanitize_fts5_term_preserves_apostrophes() {
+        assert_eq!(sanitize_fts5_term("don't"), "don't");
+        assert_eq!(sanitize_fts5_term("it's"), "it's");
+    }
+
+    #[test]
+    fn sanitize_fts5_term_strips_other_punctuation() {
+        assert_eq!(sanitize_fts5_term("hello!"), "hello");
+        assert_eq!(sanitize_fts5_term("test@value"), "testvalue");
+        assert_eq!(sanitize_fts5_term("a.b"), "ab");
+    }
+
+    #[test]
+    fn sanitize_fts5_term_lowercases_output() {
+        assert_eq!(sanitize_fts5_term("Hello"), "hello");
+        assert_eq!(sanitize_fts5_term("MY_VAR"), "my_var");
+    }
+
+    #[test]
+    fn sanitize_fts5_term_handles_unicode_letters_and_numbers() {
+        assert_eq!(sanitize_fts5_term("café"), "café");
+        assert_eq!(sanitize_fts5_term("日本語"), "日本語");
+    }
+
+    #[test]
+    fn sanitize_fts5_term_drops_combining_marks_like_ts() {
+        // `\p{L}\p{N}` excludes combining marks that `char::is_alphanumeric()`
+        // would keep (they have the `Other_Alphabetic` property). U+093E is a
+        // Devanagari vowel sign (general category Mc) — TS strips it.
+        assert_eq!(sanitize_fts5_term("a\u{093E}"), "a");
     }
 }
