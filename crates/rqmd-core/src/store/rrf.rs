@@ -264,6 +264,81 @@ mod tests {
         assert!((t.total_score - expected).abs() < 1e-9);
     }
 
+    // --- ported from rrf-trace.test.ts `describe("buildRrfTrace")` ---
+
+    #[test]
+    fn rrf_trace_matches_fusion_totals_and_records_contributions() {
+        let list1 = vec![
+            ranked("qmd://docs/a.md", 0.92),
+            ranked("qmd://docs/b.md", 0.81),
+        ];
+        let list2 = vec![
+            ranked("qmd://docs/b.md", 0.77),
+            ranked("qmd://docs/a.md", 0.65),
+        ];
+        let weights = [2.0, 1.0];
+        let meta = vec![
+            RankedListMeta {
+                source: SearchSource::Fts,
+                query_type: QueryType::Lex,
+                query: "lex query".into(),
+            },
+            RankedListMeta {
+                source: SearchSource::Vec,
+                query_type: QueryType::Vec,
+                query: "vec query".into(),
+            },
+        ];
+
+        // Bind once and share `&lists` across both APIs (no clone needed).
+        let lists = vec![list1, list2];
+        let traces = build_rrf_trace(&lists, &weights, &meta, None);
+        let fused = reciprocal_rank_fusion(&lists, &weights, None);
+
+        // build_rrf_trace totals must equal reciprocal_rank_fusion scores.
+        // TS `toBeCloseTo(_, 10)` ⇒ |diff| < 0.5e-10.
+        for result in &fused {
+            let trace = traces
+                .get(&result.file)
+                .expect("trace defined for fused result");
+            assert!(
+                (trace.total_score - result.score).abs() < 5e-11,
+                "total_score {} vs fused score {} for {}",
+                trace.total_score,
+                result.score,
+                result.file
+            );
+        }
+
+        let a_trace = &traces["qmd://docs/a.md"];
+        assert_eq!(a_trace.contributions.len(), 2);
+        assert_eq!(a_trace.contributions[0].source, SearchSource::Fts);
+        assert_eq!(a_trace.contributions[1].source, SearchSource::Vec);
+        assert_eq!(a_trace.top_rank, 1);
+        assert!((a_trace.top_rank_bonus - 0.05).abs() < 5e-11);
+    }
+
+    #[test]
+    fn rrf_trace_applies_top_rank_bonus_thresholds() {
+        let list = vec![
+            ranked("qmd://docs/r1.md", 0.9),
+            ranked("qmd://docs/r2.md", 0.8),
+            ranked("qmd://docs/r3.md", 0.7),
+            ranked("qmd://docs/r4.md", 0.6),
+        ];
+        let meta = vec![RankedListMeta {
+            source: SearchSource::Fts,
+            query_type: QueryType::Lex,
+            query: "rank".into(),
+        }];
+        let traces = build_rrf_trace(&[list], &[1.0], &meta, None);
+
+        assert!((traces["qmd://docs/r1.md"].top_rank_bonus - 0.05).abs() < 5e-11);
+        assert!((traces["qmd://docs/r2.md"].top_rank_bonus - 0.02).abs() < 5e-11);
+        assert!((traces["qmd://docs/r3.md"].top_rank_bonus - 0.02).abs() < 5e-11);
+        assert!((traces["qmd://docs/r4.md"].top_rank_bonus - 0.0).abs() < 5e-11);
+    }
+
     // --- ported from store.test.ts `describe("Reciprocal Rank Fusion")` ---
 
     #[test]
