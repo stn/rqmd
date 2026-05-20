@@ -354,6 +354,34 @@ pub fn get_ast_status() -> AstStatus {
 }
 
 // ============================================================================
+// Symbol extraction (Phase 2 stub)
+// ============================================================================
+
+/// Metadata for a single symbol within a code range.
+/// Mirrors the TS `SymbolInfo` interface (`ast.ts:385–390`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SymbolInfo {
+    pub name: String,
+    pub kind: String,
+    pub signature: Option<String>,
+    pub line: usize,
+}
+
+/// Extract symbol metadata for code within a byte range.
+///
+/// Phase 2 stub — always returns an empty `Vec`, mirroring TS `extractSymbols`
+/// (`ast.ts:396–403`). The signature is preserved (including `language: &str`)
+/// so the future Phase 2 implementation is a drop-in.
+pub fn extract_symbols(
+    _content: &str,
+    _language: &str,
+    _start_pos: usize,
+    _end_pos: usize,
+) -> Vec<SymbolInfo> {
+    Vec::new()
+}
+
+// ============================================================================
 // Unit tests
 // ============================================================================
 
@@ -397,6 +425,49 @@ mod tests {
         assert_eq!(detect_language("doc.md"), None);
         assert_eq!(detect_language("notes.txt"), None);
         assert_eq!(detect_language("no-extension"), None);
+        // Other common non-code extensions / extension-less names.
+        assert_eq!(detect_language("data/file.csv"), None);
+        assert_eq!(detect_language("config.yaml"), None);
+        assert_eq!(detect_language("Makefile"), None);
+    }
+
+    #[test]
+    fn detect_language_javascript() {
+        assert_eq!(
+            detect_language("util.js"),
+            Some(SupportedLanguage::Javascript)
+        );
+        assert_eq!(
+            detect_language("util.mjs"),
+            Some(SupportedLanguage::Javascript)
+        );
+        assert_eq!(
+            detect_language("util.cjs"),
+            Some(SupportedLanguage::Javascript)
+        );
+    }
+
+    #[test]
+    fn detect_language_python() {
+        assert_eq!(detect_language("auth.py"), Some(SupportedLanguage::Python));
+    }
+
+    #[test]
+    fn detect_language_go() {
+        assert_eq!(detect_language("auth.go"), Some(SupportedLanguage::Go));
+    }
+
+    #[test]
+    fn detect_language_virtual_qmd_paths() {
+        // Relies on `Path::extension` reading the final path segment's
+        // extension; the `qmd://` scheme and `://` do not interfere because the
+        // last component still carries a normal extension. (A scheme-only path
+        // with no trailing extension would break this assumption.)
+        assert_eq!(
+            detect_language("qmd://myproject/src/auth.ts"),
+            Some(SupportedLanguage::Typescript)
+        );
+        assert_eq!(detect_language("qmd://docs/README.md"), None);
     }
 
     // ---- get_ast_break_points ----
@@ -483,5 +554,283 @@ mod tests {
                 lang.error
             );
         }
+    }
+
+    // ---- get_ast_break_points: TypeScript (full boundary coverage) ----
+
+    const TS_SAMPLE: &str = r#"import { Database } from './db';
+import type { User } from './types';
+
+interface AuthConfig {
+  secret: string;
+  ttl: number;
+}
+
+type UserId = string;
+
+export class AuthService {
+  constructor(private db: Database) {}
+
+  async authenticate(user: User, token: string): Promise<boolean> {
+    const session = await this.db.findSession(token);
+    return session?.userId === user.id;
+  }
+
+  validateToken(token: string): boolean {
+    return token.length === 64;
+  }
+}
+
+export function hashPassword(password: string): string {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+"#;
+
+    #[test]
+    fn break_points_typescript_all_boundaries() {
+        let bps = get_ast_break_points(TS_SAMPLE, "src/auth.ts");
+        assert!(!bps.is_empty());
+        // import -> AstImport; interface/class -> AstClass; type alias ->
+        // AstType; method/export/function -> AstFunc.
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstImport));
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstClass));
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstType));
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstFunc));
+    }
+
+    #[test]
+    fn break_points_typescript_sorted_by_position() {
+        let bps = get_ast_break_points(TS_SAMPLE, "src/auth.ts");
+        for w in bps.windows(2) {
+            assert!(w[0].pos <= w[1].pos);
+        }
+    }
+
+    #[test]
+    fn break_points_typescript_scores_hierarchy() {
+        let bps = get_ast_break_points(TS_SAMPLE, "src/auth.ts");
+        // interface -> AstClass = 100
+        assert!(bps
+            .iter()
+            .any(|b| b.kind == BreakKind::AstClass && b.score == 100));
+        // method -> AstFunc = 90
+        assert!(bps
+            .iter()
+            .any(|b| b.kind == BreakKind::AstFunc && b.score == 90));
+        // import -> AstImport = 60
+        assert!(bps
+            .iter()
+            .any(|b| b.kind == BreakKind::AstImport && b.score == 60));
+    }
+
+    #[test]
+    fn break_points_typescript_positions_match_content() {
+        let bps = get_ast_break_points(TS_SAMPLE, "src/auth.ts");
+        // `pos` is a byte offset; the first import starts at byte 0.
+        let first_import = bps
+            .iter()
+            .find(|b| b.kind == BreakKind::AstImport)
+            .expect("expected an import break point");
+        assert_eq!(&TS_SAMPLE[first_import.pos..first_import.pos + 6], "import");
+    }
+
+    // ---- get_ast_break_points: Python ----
+
+    const PY_SAMPLE: &str = r#"import os
+from typing import Optional
+
+class AuthService:
+    def __init__(self, db):
+        self.db = db
+
+    async def authenticate(self, user, token):
+        session = await self.db.find(token)
+        return session.user_id == user.id
+
+    def validate_token(self, token):
+        return len(token) == 64
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+@decorator
+def decorated_func():
+    pass
+"#;
+
+    #[test]
+    fn break_points_python_all_kinds() {
+        let bps = get_ast_break_points(PY_SAMPLE, "auth.py");
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstImport));
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstClass));
+        // function_definition + decorated_definition both fold to AstFunc.
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstFunc));
+    }
+
+    #[test]
+    fn break_points_python_methods_in_classes() {
+        let bps = get_ast_break_points(PY_SAMPLE, "auth.py");
+        // __init__, authenticate, validate_token (methods) + module funcs.
+        let funcs = bps.iter().filter(|b| b.kind == BreakKind::AstFunc).count();
+        assert!(
+            funcs >= 3,
+            "expected >= 3 AstFunc break points, got {funcs}"
+        );
+    }
+
+    // ---- get_ast_break_points: Go ----
+
+    const GO_SAMPLE: &str = r#"package main
+
+import "fmt"
+
+type AuthService struct {
+    db *Database
+}
+
+func (s *AuthService) Authenticate(user User) bool {
+    return true
+}
+
+func HashPassword(password string) string {
+    return "hash"
+}
+"#;
+
+    #[test]
+    fn break_points_go_all_kinds() {
+        let bps = get_ast_break_points(GO_SAMPLE, "auth.go");
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstImport));
+        // type_declaration -> AstType
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstType));
+        // function_declaration + method_declaration both fold to AstFunc.
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstFunc));
+    }
+
+    #[test]
+    fn break_points_go_func_and_method_score_90() {
+        let bps = get_ast_break_points(GO_SAMPLE, "auth.go");
+        let funcs: Vec<_> = bps
+            .iter()
+            .filter(|b| b.kind == BreakKind::AstFunc)
+            .collect();
+        // One free function + one method, both AstFunc score 90.
+        assert!(
+            funcs.len() >= 2,
+            "expected func + method, got {}",
+            funcs.len()
+        );
+        assert!(funcs.iter().all(|b| b.score == 90));
+    }
+
+    // ---- get_ast_break_points: Rust (full coverage) ----
+
+    const RS_SAMPLE: &str = r#"use std::collections::HashMap;
+
+struct AuthService {
+    db: Database,
+}
+
+impl AuthService {
+    fn authenticate(&self, user: &User) -> bool {
+        true
+    }
+}
+
+trait Authenticatable {
+    fn validate(&self) -> bool;
+}
+
+enum Role {
+    Admin,
+    User,
+}
+
+fn hash_password(password: &str) -> String {
+    String::new()
+}
+"#;
+
+    #[test]
+    fn break_points_rust_all_kinds() {
+        let bps = get_ast_break_points(RS_SAMPLE, "auth.rs");
+        // use -> AstImport
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstImport));
+        // struct + impl + trait all fold to AstClass; require all three.
+        let classes = bps.iter().filter(|b| b.kind == BreakKind::AstClass).count();
+        assert!(
+            classes >= 3,
+            "struct+impl+trait should yield >=3 AstClass, got {classes}"
+        );
+        // enum -> AstType
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstType));
+        // fn -> AstFunc
+        assert!(bps.iter().any(|b| b.kind == BreakKind::AstFunc));
+    }
+
+    #[test]
+    fn break_points_rust_struct_impl_trait_score_100() {
+        let bps = get_ast_break_points(RS_SAMPLE, "auth.rs");
+        let classes: Vec<_> = bps
+            .iter()
+            .filter(|b| b.kind == BreakKind::AstClass)
+            .collect();
+        assert!(classes.len() >= 3);
+        assert!(classes.iter().all(|b| b.score == 100));
+    }
+
+    // ---- error handling ----
+
+    #[test]
+    fn break_points_unknown_extension_empty() {
+        assert!(get_ast_break_points("data,here", "file.csv").is_empty());
+    }
+
+    // ---- AST break point scores (from ast-chunking.test.ts) ----
+
+    #[test]
+    fn score_typescript_export_is_func_90() {
+        // TS `export` folds to AstFunc (score 90) in this port.
+        let bps = get_ast_break_points("export class Foo {}\nexport function bar() {}", "a.ts");
+        assert!(bps
+            .iter()
+            .any(|b| b.kind == BreakKind::AstFunc && b.score == 90));
+    }
+
+    #[test]
+    fn score_python_class_100() {
+        let bps = get_ast_break_points("class Foo:\n    pass\n\ndef bar():\n    pass", "a.py");
+        assert!(bps
+            .iter()
+            .any(|b| b.kind == BreakKind::AstClass && b.score == 100));
+    }
+
+    #[test]
+    fn score_go_type_80() {
+        let bps = get_ast_break_points(
+            "package main\n\ntype Server struct {\n    port int\n}\n\nfunc main() {}",
+            "a.go",
+        );
+        assert!(bps
+            .iter()
+            .any(|b| b.kind == BreakKind::AstType && b.score == 80));
+    }
+
+    #[test]
+    fn score_rust_enum_80() {
+        // enum folds to AstType (score 80).
+        let bps =
+            get_ast_break_points("enum State {\n    On,\n    Off,\n}\n\nfn main() {}", "a.rs");
+        assert!(bps
+            .iter()
+            .any(|b| b.kind == BreakKind::AstType && b.score == 80));
+    }
+
+    // ---- extract_symbols (Phase 2 stub) ----
+
+    #[test]
+    fn extract_symbols_returns_empty_phase2_stub() {
+        let symbols = extract_symbols("function foo() {}", "typescript", 0, 18);
+        assert!(symbols.is_empty());
     }
 }

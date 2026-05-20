@@ -90,8 +90,12 @@ pub struct CodeFenceRegion {
     pub end: usize,
 }
 
-/// Chunking strategy. The token-based variant is out of scope this pass;
-/// `Auto` and `Regex` both currently use the regex (manual-scan) algorithm.
+/// Chunking strategy. The token-based variant is out of scope this pass.
+///
+/// `Auto` augments the regex (manual-scan) break points with AST break points
+/// when a supported code `filepath` is supplied; `Regex` always uses the regex
+/// algorithm alone and never invokes the AST parser, even for code files.
+/// Mirrors TS `chunkDocumentAsync` strategy handling (`store.ts:2394`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChunkStrategy {
     #[default]
@@ -389,23 +393,32 @@ fn snap_to_char_boundary(text: &str, mut idx: usize) -> usize {
 
 /// Synchronous chunk entry point. Mirrors `chunkDocument` (`store.ts:2363–2380`).
 ///
-/// `filepath` enables AST-aware chunking for supported code files (see
-/// [`super::ast::detect_language`]). Pass `None` for content with no
+/// In `Auto` mode, `filepath` enables AST-aware chunking for supported code
+/// files (see [`super::ast::detect_language`]). Pass `None` for content with no
 /// associated path or when AST chunking is undesired; passing `Some` for a
 /// markdown or other unsupported extension is harmless — the AST step
-/// becomes a no-op.
+/// becomes a no-op. The `Regex` strategy bypasses the AST parser entirely
+/// regardless of `filepath`.
 pub fn chunk_document(
     content: &str,
-    _strategy: ChunkStrategy,
+    strategy: ChunkStrategy,
     filepath: Option<&str>,
     max_chars: Option<usize>,
     overlap_chars: Option<usize>,
     window_chars: Option<usize>,
 ) -> Vec<Chunk> {
     let regex_bp = scan_break_points(content);
-    let ast_bp = filepath
-        .map(|p| super::ast::get_ast_break_points(content, p))
-        .unwrap_or_default();
+    // AST break points are only used in `Auto` mode. The `Regex` strategy
+    // bypasses the AST parser entirely, even when a code `filepath` is given —
+    // mirrors TS `chunkDocumentAsync` (`store.ts:2394`, AST only when
+    // `strategy === "auto" && filepath`).
+    let ast_bp = if strategy == ChunkStrategy::Regex {
+        Vec::new()
+    } else {
+        filepath
+            .map(|p| super::ast::get_ast_break_points(content, p))
+            .unwrap_or_default()
+    };
     let break_points = if ast_bp.is_empty() {
         regex_bp
     } else {
@@ -833,5 +846,186 @@ Final section content.
             assert!(!c.text.is_empty());
             assert!(content.is_char_boundary(c.pos));
         }
+    }
+
+    // ======================================================================
+    // AST-aware chunking integration: ported from tobi/qmd's
+    // test/ast-chunking.test.ts
+    // ======================================================================
+
+    // A multi-function TS source large enough that AST break points (score 90
+    // at function boundaries) shift chunk cutoffs away from the regex
+    // blank-line breaks (score 20). Mirrors the `largeTS` fixture in
+    // ast-chunking.test.ts.
+    fn handlers_sample() -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for i in 0..30 {
+            parts.push(format!(
+                "\nexport function handler{i}(req: Request, res: Response): void {{\n  const startTime = Date.now();\n  const userId = req.params.userId;\n  const sessionToken = req.headers.authorization;\n\n  if (!userId || !sessionToken) {{\n    res.status(400).json({{ error: \"Missing required parameters\" }});\n    return;\n  }}\n\n  const result = processBusinessLogic{i}(userId, sessionToken);\n  const elapsed = Date.now() - startTime;\n  res.json({{ data: result, processingTimeMs: elapsed }});\n}}\n"
+            ));
+        }
+        parts.join("\n")
+    }
+
+    // Count how many of the 30 functions straddle a chunk boundary.
+    // Byte-based throughout (chunk.pos and text.len() are byte offsets).
+    fn count_split_functions(source: &str, chunks: &[Chunk]) -> usize {
+        let mut splits = 0;
+        for i in 0..30 {
+            let needle = format!("function handler{i}(");
+            let Some(func_start) = source.find(&needle) else {
+                continue;
+            };
+            let next_needle = format!("function handler{}(", i + 1);
+            let func_end = source[func_start + 1..]
+                .find(&next_needle)
+                .map(|p| func_start + 1 + p)
+                .unwrap_or(source.len());
+            let mut covering = std::collections::HashSet::new();
+            for (ci, c) in chunks.iter().enumerate() {
+                let chunk_start = c.pos;
+                let chunk_end = chunk_start + c.text.len();
+                if chunk_start < func_end && chunk_end > func_start {
+                    covering.insert(ci);
+                }
+            }
+            if covering.len() > 1 {
+                splits += 1;
+            }
+        }
+        splits
+    }
+
+    // --- mergeBreakPoints: ast-chunking.test.ts variant (4 positions) ---
+
+    #[test]
+    fn merge_ast_variant_higher_score_wins() {
+        let regex = [
+            mk(10, 20, BreakKind::Blank),
+            mk(50, 1, BreakKind::Newline),
+            mk(100, 20, BreakKind::Blank),
+        ];
+        let ast = [
+            mk(10, 90, BreakKind::AstFunc),
+            mk(75, 100, BreakKind::AstClass),
+            mk(100, 60, BreakKind::AstImport),
+        ];
+        let merged = merge_break_points(&regex, &ast);
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged.iter().find(|b| b.pos == 10).unwrap().score, 90); // AST wins (90>20)
+        assert_eq!(merged.iter().find(|b| b.pos == 50).unwrap().score, 1); // regex only
+        assert_eq!(merged.iter().find(|b| b.pos == 75).unwrap().score, 100); // AST only
+        assert_eq!(merged.iter().find(|b| b.pos == 100).unwrap().score, 60); // AST wins (60>20)
+    }
+
+    // --- AST vs Regex chunking ---
+
+    #[test]
+    fn ast_splits_fewer_functions_than_regex() {
+        let large_ts = handlers_sample();
+        let regex_chunks = chunk_document(&large_ts, ChunkStrategy::Auto, None, None, None, None);
+        let ast_chunks = chunk_document(
+            &large_ts,
+            ChunkStrategy::Auto,
+            Some("handlers.ts"),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            count_split_functions(&large_ts, &ast_chunks)
+                <= count_split_functions(&large_ts, &regex_chunks)
+        );
+        // Prove AST actually moved boundaries — otherwise the `<=` above (and
+        // the bypass test below) would pass trivially.
+        assert_ne!(ast_chunks, regex_chunks);
+    }
+
+    #[test]
+    fn markdown_identical_ast_vs_regex() {
+        let mut sections: Vec<String> = Vec::new();
+        for i in 0..15 {
+            sections.push(format!(
+                "# Section {i}\n\n{}\n",
+                "Lorem ipsum dolor sit amet. ".repeat(40)
+            ));
+        }
+        let large_md = sections.join("\n");
+        let md_regex = chunk_document(&large_md, ChunkStrategy::Auto, None, None, None, None);
+        let md_ast = chunk_document(
+            &large_md,
+            ChunkStrategy::Auto,
+            Some("readme.md"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(md_ast, md_regex);
+    }
+
+    #[test]
+    fn regex_strategy_bypasses_ast() {
+        let large_ts = handlers_sample();
+        let regex_baseline =
+            chunk_document(&large_ts, ChunkStrategy::Regex, None, None, None, None);
+        let auto_with_ast = chunk_document(
+            &large_ts,
+            ChunkStrategy::Auto,
+            Some("handlers.ts"),
+            None,
+            None,
+            None,
+        );
+        let regex_with_filepath = chunk_document(
+            &large_ts,
+            ChunkStrategy::Regex,
+            Some("handlers.ts"),
+            None,
+            None,
+            None,
+        );
+        // Sanity: AST is genuinely active in Auto mode for this sample.
+        assert_ne!(auto_with_ast, regex_baseline);
+        // The Regex strategy bypasses AST even with a code filepath present.
+        assert_eq!(regex_with_filepath, regex_baseline);
+    }
+
+    #[test]
+    fn no_filepath_falls_back_to_regex() {
+        let large_ts = handlers_sample();
+        let no_path = chunk_document(&large_ts, ChunkStrategy::Auto, None, None, None, None);
+        let regex = chunk_document(&large_ts, ChunkStrategy::Regex, None, None, None, None);
+        assert_eq!(no_path, regex);
+    }
+
+    #[test]
+    fn small_file_single_chunk_ast() {
+        let chunks = chunk_document(
+            "export const x = 1;",
+            ChunkStrategy::Auto,
+            Some("s.ts"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(chunks.len(), 1);
+    }
+
+    // --- chunkDocumentWithBreakPoints equivalence ---
+
+    #[test]
+    fn chunk_with_break_points_matches_chunk_document() {
+        let content = "a".repeat(5000) + "\n\n" + &"b".repeat(5000);
+        let via_chunk_document =
+            chunk_document(&content, ChunkStrategy::Auto, None, None, None, None);
+        let via_break_points = chunk_document_with_break_points(
+            &content,
+            &scan_break_points(&content),
+            &find_code_fences(&content),
+            CHUNK_SIZE_CHARS,
+            CHUNK_OVERLAP_CHARS,
+            CHUNK_WINDOW_CHARS,
+        );
+        assert_eq!(via_chunk_document, via_break_points);
     }
 }
