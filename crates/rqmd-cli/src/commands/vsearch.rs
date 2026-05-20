@@ -5,28 +5,29 @@
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
-use rqmd_core::Store;
-use rqmd_core::store_ops::{
-    vector_search_query, ExpandedQuery, SearchHooks, VectorSearchOptions,
-};
+use anyhow::{Context, Result};
 use rqmd_core::llm::traits::Llm;
+use rqmd_core::store_ops::{vector_search_query, ExpandedQuery, SearchHooks, VectorSearchOptions};
+use rqmd_core::Store;
 
 use crate::cli::VsearchArgs;
+use crate::collection_filter::{filter_by_collections, resolve_collection_filter, single_collection};
 use crate::color::Palette;
 use crate::output::OutputFormat;
 use crate::search_view::{print_hits, vector_result_to_hit};
 use crate::state::IndexState;
 
 pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
-    if args.flags.collection.len() > 1 {
-        bail!(
-            "vsearch accepts at most one --collection (got {})",
-            args.flags.collection.len()
-        );
-    }
     let q = args.query.join(" ");
     let fmt = OutputFormat::from(&args.format);
+
+    // `-c` omitted → default collections; explicit names validated. Resolve
+    // before borrowing the LLM/store (the helper returns an owned Vec, releasing
+    // the `&mut Config` borrow). TS `resolveCollectionFilter(opts.collection,
+    // true)`, qmd.ts:2448.
+    let collection_names =
+        resolve_collection_filter(state.config_mut()?, &args.flags.collection, true)?;
+    let collection = single_collection(&collection_names);
 
     // Borrow order matters: take Arc<LlamaCpp> first (consumes &mut self only
     // for the call), then re-borrow store_mut's &mut Store as &Store for the
@@ -35,7 +36,7 @@ pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Resu
     let store: &Store = state.store_mut()?;
 
     let opts = VectorSearchOptions {
-        collection: args.flags.collection.first().cloned(),
+        collection,
         limit: Some(if args.flags.all {
             500
         } else {
@@ -52,6 +53,10 @@ pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Resu
     let results = vector_search_query(store, llm_dyn, &q, opts)
         .await
         .context("vsearch failed")?;
+
+    // Multi-collection post-filter (TS `filterByCollections`, qmd.ts:2468-2473);
+    // no-op for 0/1 collection.
+    let results = filter_by_collections(results, &collection_names, |r| r.file.as_str());
 
     let hits: Vec<_> = results
         .iter()
@@ -72,10 +77,7 @@ fn build_vsearch_hooks(fmt: OutputFormat) -> SearchHooks {
     }
     SearchHooks {
         on_expand: Some(Arc::new(|orig, expanded: &[ExpandedQuery], ms| {
-            eprintln!(
-                "Expanded \"{orig}\" -> {} queries ({ms}ms)",
-                expanded.len()
-            );
+            eprintln!("Expanded \"{orig}\" -> {} queries ({ms}ms)", expanded.len());
             for e in expanded {
                 eprintln!("  [{:?}] {}", e.type_, e.query);
             }

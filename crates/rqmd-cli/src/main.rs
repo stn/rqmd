@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::Parser;
 
 mod cli;
+mod collection_filter;
 mod color;
 mod commands;
 mod format_helpers;

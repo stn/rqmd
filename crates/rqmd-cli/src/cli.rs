@@ -229,7 +229,8 @@ pub struct LsArgs {
 /// on [`FormatFlags`] for why.
 #[derive(Debug, Args, Clone)]
 pub struct SearchFlags {
-    /// Restrict to a single collection. Pass at most once.
+    /// Restrict to one or more collections. Repeat `-c` for several; omit to
+    /// search the default collections (those not excluded via `collection exclude`).
     #[arg(short = 'c', long)]
     pub collection: Vec<String>,
     /// Limit results.

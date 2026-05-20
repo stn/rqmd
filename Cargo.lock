@@ -1623,6 +1623,7 @@ dependencies = [
  "rqmd-mcp",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

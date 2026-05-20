@@ -18,18 +18,13 @@ use rqmd_core::llm::traits::Llm;
 use serde_json::json;
 
 use crate::cli::QueryArgs;
+use crate::collection_filter::{filter_by_collections, resolve_collection_filter, single_collection};
 use crate::color::Palette;
 use crate::output::OutputFormat;
 use crate::search_view::{hybrid_result_to_hit, print_hits, ExplainView, Hit};
 use crate::state::IndexState;
 
 pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
-    if args.flags.collection.len() > 1 {
-        bail!(
-            "query accepts at most one --collection (got {})",
-            args.flags.collection.len()
-        );
-    }
     let q = args.query.join(" ");
     let fmt = OutputFormat::from(&args.format);
 
@@ -52,6 +47,14 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
     });
     let min_score = Some(args.flags.min_score.unwrap_or(0.0));
 
+    // Resolve the collection filter (TS `resolveCollectionFilter(opts.collection,
+    // true)`, qmd.ts:2499) before borrowing the LLM/store — the helper returns an
+    // owned Vec so the `&mut Config` borrow is released here. `-c` omitted →
+    // default collections; explicit names are validated.
+    let collection_names =
+        resolve_collection_filter(state.config_mut()?, &args.flags.collection, true)?;
+    let single = single_collection(&collection_names);
+
     let llm = state.llama_cpp()?;
     let store: &Store = state.store_mut()?;
     let llm_dyn: Arc<dyn Llm> = llm;
@@ -63,9 +66,10 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
             llm_dyn,
             &pq.searches,
             StructuredSearchOptions {
-                // `query` allows at most one collection; wrap it as a single-element
-                // list (TS: `singleCollection ? [singleCollection] : undefined`).
-                collections: args.flags.collection.first().cloned().map(|c| vec![c]),
+                // Only the single-collection case filters at the DB level; with
+                // multiple collections we search all and post-filter below
+                // (TS: `singleCollection ? [singleCollection] : undefined`).
+                collections: single.clone().map(|c| vec![c]),
                 limit,
                 min_score,
                 candidate_limit: args.candidate_limit,
@@ -83,7 +87,7 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
         // does NOT strip the `expand:` prefix before `hybridQuery` (qmd.ts:2557),
         // so we reproduce that for parity (known latent quirk).
         let opts = HybridQueryOptions {
-            collection: args.flags.collection.first().cloned(),
+            collection: single.clone(),
             limit,
             min_score,
             candidate_limit: args.candidate_limit,
@@ -97,6 +101,10 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
             .await
             .context("query failed")?
     };
+
+    // Narrow to the requested collections when more than one is in play
+    // (TS `filterByCollections`, qmd.ts:2597-2602). No-op for 0/1 collection.
+    let results = filter_by_collections(results, &collection_names, |r| r.file.as_str());
 
     let hits: Vec<Hit> = results
         .iter()

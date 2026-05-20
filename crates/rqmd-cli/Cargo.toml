@@ -29,6 +29,10 @@ indexmap   = { workspace = true }
 # (spawn_blocking) and embed (session timers).
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
+[dev-dependencies]
+# `collection_filter` unit tests build a YAML-backed `Config` on a temp path.
+tempfile   = { workspace = true }
+
 [features]
 # GPU backends re-exported from rqmd-core so users can invoke `cargo build -p
 # rqmd-cli --features metal` (etc.) without referencing the core crate name.
