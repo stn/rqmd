@@ -109,6 +109,10 @@ mod tests {
         let out = filter_by_collections(r, &["docs".into()], |r| r.file.as_str());
         // <= 1 collection → DB already filtered, so nothing is dropped here.
         assert_eq!(out.len(), 2);
+
+        // An empty list is also a no-op (`names.len() <= 1`, matching TS `length <= 1`).
+        let r = vec![rec("qmd://docs/x.md"), rec("qmd://notes/y.md")];
+        assert_eq!(filter_by_collections(r, &[], |r| r.file.as_str()).len(), 2);
     }
 
     #[test]
@@ -121,6 +125,62 @@ mod tests {
         let out = filter_by_collections(r, &["docs".into(), "notes".into()], |r| r.file.as_str());
         let files: Vec<&str> = out.iter().map(|r| r.file.as_str()).collect();
         assert_eq!(files, vec!["qmd://docs/x.md", "qmd://notes/y.md"]);
+    }
+
+    #[test]
+    fn filter_keeps_matching_collections_preserving_order() {
+        // Mirrors qmd test "filters to matching collections when multiple specified":
+        // `docs` appears twice and the original order is preserved.
+        let r = vec![
+            rec("qmd://docs/readme.md"),
+            rec("qmd://notes/todo.md"),
+            rec("qmd://journals/2024/jan.md"),
+            rec("qmd://docs/api.md"),
+        ];
+        let out =
+            filter_by_collections(r, &["docs".into(), "journals".into()], |r| r.file.as_str());
+        let files: Vec<&str> = out.iter().map(|r| r.file.as_str()).collect();
+        assert_eq!(
+            files,
+            vec![
+                "qmd://docs/readme.md",
+                "qmd://journals/2024/jan.md",
+                "qmd://docs/api.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_two_collections_non_adjacent() {
+        // Mirrors qmd test "filters correctly with two collections": the two
+        // selected collections are not adjacent in input order.
+        let r = vec![
+            rec("qmd://docs/readme.md"),
+            rec("qmd://notes/todo.md"),
+            rec("qmd://journals/2024/jan.md"),
+            rec("qmd://docs/api.md"),
+        ];
+        let out =
+            filter_by_collections(r, &["notes".into(), "journals".into()], |r| r.file.as_str());
+        let files: Vec<&str> = out.iter().map(|r| r.file.as_str()).collect();
+        assert_eq!(
+            files,
+            vec!["qmd://notes/todo.md", "qmd://journals/2024/jan.md"]
+        );
+    }
+
+    #[test]
+    fn filter_returns_empty_when_none_match() {
+        // Mirrors qmd test "returns empty when no results match collections".
+        let r = vec![
+            rec("qmd://docs/readme.md"),
+            rec("qmd://notes/todo.md"),
+            rec("qmd://journals/2024/jan.md"),
+            rec("qmd://docs/api.md"),
+        ];
+        let out =
+            filter_by_collections(r, &["archive".into(), "trash".into()], |r| r.file.as_str());
+        assert!(out.is_empty());
     }
 
     #[test]
