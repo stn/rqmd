@@ -11,7 +11,7 @@ use rqmd_core::store::chunking::ChunkStrategy;
     name = "rqmd",
     version,
     about = "On-device hybrid search for markdown (Rust port of tobi/qmd)",
-    after_help = "Note: skill, skills, and bench commands from qmd are not yet implemented in rqmd."
+    after_help = "Note: skill and skills commands from qmd are not yet implemented in rqmd."
 )]
 pub struct Cli {
     /// Use a named index (default: "index"). Selects `<name>.sqlite` under the
@@ -69,6 +69,9 @@ pub enum Command {
 
     /// Hybrid search: BM25 + vector + LLM expansion + reranking.
     Query(QueryArgs),
+
+    /// Run a benchmark fixture across all four search backends.
+    Bench(BenchArgs),
 
     /// Generate/refresh vector embeddings for indexed documents.
     Embed(EmbedArgs),
@@ -295,6 +298,24 @@ pub struct QueryArgs {
     /// Query string (positional, joined by spaces).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub query: Vec<String>,
+}
+
+// ============================================================================
+// bench
+// ============================================================================
+
+#[derive(Debug, Args)]
+pub struct BenchArgs {
+    /// Path to the benchmark fixture JSON. See
+    /// `crates/rqmd-core/src/bench/fixtures/example.json` for the format.
+    pub fixture: String,
+    /// Emit the full result as JSON instead of the ASCII table + summary.
+    #[arg(long)]
+    pub json: bool,
+    /// Restrict the benchmark to a single collection (overrides the fixture's
+    /// `collection` field).
+    #[arg(short = 'c', long)]
+    pub collection: Option<String>,
 }
 
 // ============================================================================

@@ -64,6 +64,7 @@ async fn run() -> Result<()> {
         Command::Search(a) => commands::search::run(a, &mut state, &palette),
         Command::Vsearch(a) => commands::vsearch::run(a, &mut state, &palette).await,
         Command::Query(a) => commands::query::run(a, &mut state, &palette).await,
+        Command::Bench(a) => commands::bench::run(a, &mut state).await,
 
         Command::Mcp(_) => commands::llm_stub::run("mcp"),
     };

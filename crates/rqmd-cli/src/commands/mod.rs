@@ -1,5 +1,6 @@
 //! Subcommand handlers. One module per top-level `rqmd` command.
 
+pub mod bench;
 pub mod cleanup;
 pub mod collection;
 pub mod context;

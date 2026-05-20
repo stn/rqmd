@@ -59,6 +59,7 @@
 //! [`RqmdStore::shutdown`] when the store is shared) before drop, otherwise
 //! the [`LlamaCpp`] worker threads leak.
 
+pub mod bench;
 pub mod collections;
 pub mod db;
 pub mod llm;
@@ -128,6 +129,13 @@ pub use store_ops::{
 pub use rqmd_store::{
     AddCollectionOptions, Error as RqmdStoreError, MultiGetBundle, Result as RqmdStoreResult,
     RqmdStore, RqmdStoreOptions, SearchOptions, UpdateOptions, UpdateProgress, UpdateResult,
+};
+
+// Bench module re-exports (pure scoring + fixture/result types). The runner
+// itself is CLI-only and lives in `rqmd-cli`.
+pub use bench::{
+    normalize_path, paths_match, score_results, BackendResult, BenchmarkFixture, BenchmarkQuery,
+    BenchmarkResult, QueryResult, ScoreMetrics, SummaryStats,
 };
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
