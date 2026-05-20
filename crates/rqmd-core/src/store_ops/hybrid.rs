@@ -573,3 +573,132 @@ fn explain_block(
         blended_score,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // Chunk selection scoring with intent — ported from intent.test.ts
+    // `describe("intent keyword extraction logic")` (intent.test.ts:300-359).
+    // `score_chunk` mirrors the best-chunk scoring in `build_doc_chunk_map`
+    // (this file, ~L361-391), using the shared `extract_intent_terms` helper
+    // and `INTENT_WEIGHT_CHUNK` constant. The real `build_doc_chunk_map` path
+    // is exercised indirectly via integration tests; tiny strings here collapse
+    // to a single chunk, so the scoring formula is verified directly (as in qmd).
+    // =========================================================================
+
+    fn score_chunk(text: &str, query: &str, intent: Option<&str>) -> f64 {
+        let query_terms: Vec<String> = query
+            .to_lowercase()
+            .split_whitespace()
+            .filter(|t| t.len() > 2)
+            .map(String::from)
+            .collect();
+        let intent_terms = intent.map(extract_intent_terms).unwrap_or_default();
+        let lower = text.to_lowercase();
+        let q_score = query_terms.iter().filter(|t| lower.contains(t.as_str())).count() as f64;
+        let i_score = intent_terms.iter().filter(|t| lower.contains(t.as_str())).count() as f64
+            * INTENT_WEIGHT_CHUNK;
+        q_score + i_score
+    }
+
+    fn scoring_chunks() -> [&'static str; 3] {
+        [
+            "Web performance: optimize page load times, reduce latency, improve rendering pipeline.",
+            "Team performance: build trust, give feedback, set clear expectations for the group.",
+            "Health performance: exercise regularly, sleep 8 hours, manage stress for endurance.",
+        ]
+    }
+
+    #[test]
+    fn chunk_score_without_intent_all_equal() {
+        let chunks = scoring_chunks();
+        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "performance", None)).collect();
+        // All contain "performance", so all score 1.0.
+        assert_eq!(scores[0], scores[1]);
+        assert_eq!(scores[1], scores[2]);
+    }
+
+    #[test]
+    fn chunk_score_web_intent_web_highest() {
+        let chunks = scoring_chunks();
+        let intent = "looking for notes about page load times and latency optimization";
+        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "performance", Some(intent))).collect();
+        assert!(scores[0] > scores[1]);
+        assert!(scores[0] > scores[2]);
+    }
+
+    #[test]
+    fn chunk_score_health_intent_health_highest() {
+        let chunks = scoring_chunks();
+        let intent = "looking for notes about exercise, sleep, and endurance";
+        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "performance", Some(intent))).collect();
+        assert!(scores[2] > scores[0]);
+        assert!(scores[2] > scores[1]);
+    }
+
+    #[test]
+    fn chunk_score_intent_lower_weight_than_query() {
+        let chunks = scoring_chunks();
+        let intent = "looking for latency";
+        // chunk 0 has "performance" (query 1.0) + "latency" (intent 0.5) = 1.5.
+        let with_both = score_chunk(chunks[0], "performance", Some(intent));
+        let query_only = score_chunk(chunks[0], "performance", None);
+        assert_eq!(with_both, query_only + INTENT_WEIGHT_CHUNK);
+    }
+
+    #[test]
+    fn chunk_score_stop_words_filtered_short_terms_survive() {
+        let chunks = scoring_chunks();
+        // "the"/"of" are stop words; "art", "web", "performance" survive.
+        // chunk 0 has "web" + "performance" → 2 intent hits; chunks 1,2 have
+        // "performance" only → 1 intent hit. Query "test" matches nothing.
+        let intent = "the art of web performance";
+        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "test", Some(intent))).collect();
+        assert_eq!(scores[0], INTENT_WEIGHT_CHUNK * 2.0); // "web" + "performance"
+        assert_eq!(scores[1], INTENT_WEIGHT_CHUNK); // "performance" only
+        assert_eq!(scores[2], INTENT_WEIGHT_CHUNK); // "performance" only
+    }
+
+    // =========================================================================
+    // Strong-signal bypass with intent — ported from intent.test.ts
+    // `describe("strong-signal bypass logic")` (intent.test.ts:365-390).
+    // `has_strong_signal` mirrors the boolean in `hybrid_query` (this file,
+    // ~L126-129) minus the non-empty-FTS guard (tested via integration).
+    // =========================================================================
+
+    fn has_strong_signal(top_score: f64, second_score: f64, intent: Option<&str>) -> bool {
+        intent.is_none()
+            && top_score >= STRONG_SIGNAL_MIN_SCORE
+            && (top_score - second_score) >= STRONG_SIGNAL_MIN_GAP
+    }
+
+    #[test]
+    fn strong_signal_detected_without_intent() {
+        assert!(has_strong_signal(0.90, 0.70, None));
+    }
+
+    #[test]
+    fn strong_signal_bypassed_when_intent_provided() {
+        assert!(!has_strong_signal(0.90, 0.70, Some("looking for health performance")));
+    }
+
+    #[test]
+    fn strong_signal_weak_not_affected_by_intent() {
+        assert!(!has_strong_signal(0.50, 0.45, None));
+        assert!(!has_strong_signal(0.50, 0.45, Some("some intent")));
+    }
+
+    #[test]
+    fn strong_signal_close_scores_not_strong() {
+        assert!(!has_strong_signal(0.90, 0.80, None)); // gap < 0.15
+    }
+
+    // --- intent constant (intent.test.ts:510-512) ---
+
+    #[test]
+    fn intent_weight_chunk_is_0_5() {
+        assert_eq!(INTENT_WEIGHT_CHUNK, 0.5);
+    }
+}

@@ -516,4 +516,102 @@ mod tests {
         let parsed = parse("  lex:   spaced query  ").unwrap().expect("structured");
         assert_eq!(parsed.searches[0].query, "spaced query");
     }
+
+    // =========================================================================
+    // Ported from intent.test.ts `describe("parseStructuredQuery with intent")`
+    // (intent.test.ts:396-499), using qmd's exact inputs/assertions. The three
+    // already-identical cases (intent_after_typed_lines,
+    // single_expand_is_not_structured, expand_mixed_with_intent_errors) are
+    // reused above and not duplicated here.
+    // =========================================================================
+
+    #[test]
+    fn intent_parses_lex_query() {
+        let parsed = parse("intent: web performance\nlex: performance")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.intent.as_deref(), Some("web performance"));
+        assert_eq!(parsed.searches.len(), 1);
+        assert_eq!(parsed.searches[0].type_, ExpandedQueryType::Lex);
+        assert_eq!(parsed.searches[0].query, "performance");
+    }
+
+    #[test]
+    fn intent_parses_multiple_typed_lines() {
+        let parsed = parse("intent: web page load times\nlex: performance\nvec: how to improve performance")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.intent.as_deref(), Some("web page load times"));
+        assert_eq!(parsed.searches.len(), 2);
+        assert_eq!(parsed.searches[0].type_, ExpandedQueryType::Lex);
+        assert_eq!(parsed.searches[1].type_, ExpandedQueryType::Vec);
+    }
+
+    #[test]
+    fn intent_case_insensitive_prefix() {
+        let parsed = parse("Intent: web perf\nlex: performance")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.intent.as_deref(), Some("web perf"));
+    }
+
+    #[test]
+    fn intent_no_intent_returns_none() {
+        let parsed = parse("lex: performance\nvec: speed")
+            .unwrap()
+            .expect("structured");
+        assert!(parsed.intent.is_none());
+    }
+
+    #[test]
+    fn intent_alone_throws() {
+        let err = parse("intent: web performance").unwrap_err();
+        assert!(err.to_string().contains("intent: cannot appear alone"));
+    }
+
+    #[test]
+    fn intent_multiple_lines_throw() {
+        let err = parse("intent: web perf\nintent: team health\nlex: performance").unwrap_err();
+        assert!(err.to_string().contains("only one intent: line is allowed"));
+    }
+
+    #[test]
+    fn intent_empty_text_throws() {
+        let err = parse("intent:\nlex: performance").unwrap_err();
+        assert!(err.to_string().contains("intent: must include text"));
+    }
+
+    #[test]
+    fn intent_whitespace_only_throws() {
+        let err = parse("intent:   \nlex: performance").unwrap_err();
+        assert!(err.to_string().contains("intent: must include text"));
+    }
+
+    #[test]
+    fn intent_single_plain_line_returns_none() {
+        assert!(parse("how does auth work").unwrap().is_none());
+    }
+
+    #[test]
+    fn intent_empty_query_returns_none() {
+        assert!(parse("").unwrap().is_none());
+        assert!(parse("  \n  \n  ").unwrap().is_none());
+    }
+
+    #[test]
+    fn intent_with_blank_lines_ok() {
+        let parsed = parse("intent: web perf\n\nlex: performance\n\nvec: speed")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.intent.as_deref(), Some("web perf"));
+        assert_eq!(parsed.searches.len(), 2);
+    }
+
+    #[test]
+    fn intent_preserves_full_text_including_colons() {
+        let parsed = parse("intent: web performance: LCP, FID, CLS\nlex: performance")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.intent.as_deref(), Some("web performance: LCP, FID, CLS"));
+    }
 }

@@ -357,4 +357,271 @@ mod tests {
         let r = extract_snippet(&body, "TARGET_KEYWORD", Some(200), Some(0), None, None);
         assert_eq!(r.line, 201);
     }
+
+    // =========================================================================
+    // extractIntentTerms — ported from intent.test.ts
+    // `describe("extractIntentTerms")` (intent.test.ts:105-173).
+    // =========================================================================
+
+    #[test]
+    fn intent_terms_filters_stop_words() {
+        // "looking", "for", "notes", "about" are stop words
+        assert_eq!(
+            extract_intent_terms("looking for notes about latency optimization"),
+            vec!["latency", "optimization"]
+        );
+    }
+
+    #[test]
+    fn intent_terms_filters_common_function_words() {
+        // "what", "is", "the", "to", "find" are stop words; "best", "way" survive
+        assert_eq!(
+            extract_intent_terms("what is the best way to find"),
+            vec!["best", "way"]
+        );
+    }
+
+    #[test]
+    fn intent_terms_preserves_domain_terms() {
+        assert_eq!(
+            extract_intent_terms("web performance latency page load times"),
+            vec!["web", "performance", "latency", "page", "load", "times"]
+        );
+    }
+
+    #[test]
+    fn intent_terms_handles_surrounding_punctuation() {
+        assert_eq!(
+            extract_intent_terms("personal health, fitness, and endurance"),
+            vec!["personal", "health", "fitness", "endurance"]
+        );
+    }
+
+    #[test]
+    fn intent_terms_preserves_internal_hyphens() {
+        assert_eq!(
+            extract_intent_terms("self-hosted real-time (decision-making)"),
+            vec!["self-hosted", "real-time", "decision-making"]
+        );
+    }
+
+    #[test]
+    fn intent_terms_short_domain_terms_survive() {
+        assert_eq!(
+            extract_intent_terms("API design for LLM agents"),
+            vec!["api", "design", "llm", "agents"]
+        );
+    }
+
+    #[test]
+    fn intent_terms_returns_empty_for_empty_input() {
+        assert!(extract_intent_terms("").is_empty());
+        assert!(extract_intent_terms("  ").is_empty());
+    }
+
+    #[test]
+    fn intent_terms_filters_single_char_terms() {
+        assert_eq!(extract_intent_terms("a b c web"), vec!["web"]);
+    }
+
+    #[test]
+    fn intent_terms_all_stop_words_returns_empty() {
+        assert!(extract_intent_terms("the and or but in on at to for of with by").is_empty());
+    }
+
+    #[test]
+    fn intent_terms_preserves_2char_domain_terms() {
+        let terms = extract_intent_terms("SQL CI CD DB");
+        assert!(terms.iter().any(|t| t == "sql"));
+        assert!(terms.iter().any(|t| t == "ci"));
+        assert!(terms.iter().any(|t| t == "cd"));
+        assert!(terms.iter().any(|t| t == "db"));
+    }
+
+    #[test]
+    fn intent_terms_lowercases_all_terms() {
+        let terms = extract_intent_terms("WebSocket HTTP REST");
+        assert!(terms.iter().any(|t| t == "websocket"));
+        assert!(terms.iter().any(|t| t == "http"));
+        assert!(terms.iter().any(|t| t == "rest"));
+    }
+
+    #[test]
+    fn intent_terms_handles_cpp_style_punctuation() {
+        let terms = extract_intent_terms("C++, performance! optimization.");
+        assert!(terms.iter().any(|t| t == "performance"));
+        assert!(terms.iter().any(|t| t == "optimization"));
+    }
+
+    // =========================================================================
+    // extractSnippet with intent — ported from intent.test.ts
+    // `describe("extractSnippet with intent")` (intent.test.ts:179-267).
+    // Each section contains "performance" so the query score ties (1.0 each);
+    // intent terms (INTENT_WEIGHT_SNIPPET) break the tie toward the relevant
+    // section. Mirrors the TS `body` built via array `.join("\n")`.
+    // =========================================================================
+
+    fn disambig_body() -> String {
+        [
+            "# Notes on Various Topics",
+            "",
+            "## Web Performance Section",
+            "Web performance means optimizing page load times and Core Web Vitals.",
+            "Reduce latency, improve rendering speed, and measure performance budgets.",
+            "",
+            "## Team Performance Section",
+            "Team performance depends on trust, psychological safety, and feedback.",
+            "Build culture where performance reviews drive growth not fear.",
+            "",
+            "## Health Performance Section",
+            "Health performance comes from consistent exercise, sleep, and endurance.",
+            "Track fitness metrics, optimize recovery, and monitor healthspan.",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn snippet_intent_without_intent_anchors_on_query() {
+        let body = disambig_body();
+        // "performance" appears in title and multiple sections — anchor on a match.
+        let r = extract_snippet(&body, "performance", Some(500), None, None, None);
+        assert!(r.snippet.contains("Performance"));
+    }
+
+    #[test]
+    fn snippet_intent_web_prefers_web_section() {
+        let body = disambig_body();
+        let r = extract_snippet(
+            &body,
+            "performance",
+            Some(500),
+            None,
+            None,
+            Some("Looking for notes about web performance, latency, and page load times"),
+        );
+        let re = regex::Regex::new(r"(?i)latency|page.*load|Core Web Vitals").unwrap();
+        assert!(re.is_match(&r.snippet), "snippet: {}", r.snippet);
+    }
+
+    #[test]
+    fn snippet_intent_health_prefers_health_section() {
+        let body = disambig_body();
+        let r = extract_snippet(
+            &body,
+            "performance",
+            Some(500),
+            None,
+            None,
+            Some("Looking for notes about personal health, fitness, and endurance"),
+        );
+        let re = regex::Regex::new(r"(?i)health|fitness|endurance|exercise").unwrap();
+        assert!(re.is_match(&r.snippet), "snippet: {}", r.snippet);
+    }
+
+    #[test]
+    fn snippet_intent_team_prefers_team_section() {
+        let body = disambig_body();
+        let r = extract_snippet(
+            &body,
+            "performance",
+            Some(500),
+            None,
+            None,
+            Some("Looking for notes about building high-performing teams and culture"),
+        );
+        let re = regex::Regex::new(r"(?i)team|culture|trust|feedback").unwrap();
+        assert!(re.is_match(&r.snippet), "snippet: {}", r.snippet);
+    }
+
+    #[test]
+    fn snippet_intent_does_not_override_strong_query_match() {
+        let body = disambig_body();
+        // "Core Web Vitals" is very specific — intent shouldn't pull away from it.
+        let r = extract_snippet(
+            &body,
+            "Core Web Vitals",
+            Some(500),
+            None,
+            None,
+            Some("Looking for notes about health and fitness"),
+        );
+        assert!(r.snippet.contains("Core Web Vitals"));
+    }
+
+    #[test]
+    fn snippet_intent_absent_equals_none() {
+        let body = disambig_body();
+        let without = extract_snippet(&body, "performance", Some(500), None, None, None);
+        let with_none = extract_snippet(&body, "performance", Some(500), None, None, None);
+        assert_eq!(without.line, with_none.line);
+        assert_eq!(without.snippet, with_none.snippet);
+    }
+
+    #[test]
+    fn snippet_intent_no_matching_terms_falls_back() {
+        let body = disambig_body();
+        let r = extract_snippet(
+            &body,
+            "performance",
+            Some(500),
+            None,
+            None,
+            Some("quantum computing and entanglement"),
+        );
+        assert!(r.snippet.contains("Performance"));
+        assert!(!r.snippet.is_empty());
+    }
+
+    #[test]
+    fn snippet_intent_works_with_chunk_position() {
+        let body = disambig_body();
+        let web_perf_start = body.find("## Web Performance").unwrap();
+        let r = extract_snippet(
+            &body,
+            "performance",
+            Some(500),
+            Some(web_perf_start),
+            Some(200),
+            Some("web page load times"),
+        );
+        let re = regex::Regex::new(r"(?i)Web Performance|Core Web Vitals|Page load").unwrap();
+        assert!(re.is_match(&r.snippet), "snippet: {}", r.snippet);
+    }
+
+    // --- extractSnippet intent weight behavior (intent.test.ts:273-294) ---
+
+    fn weight_body() -> String {
+        [
+            "performance metrics for team velocity",
+            "performance metrics for web latency",
+            "performance metrics for athletic endurance",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn snippet_intent_breaks_tie_when_query_matches_all_lines() {
+        let body = weight_body();
+        // Without intent, the first line wins (all lines score equally).
+        let no_intent = extract_snippet(&body, "performance metrics", Some(500), None, None, None);
+        assert_eq!(no_intent.line, 1);
+
+        // Intent terms "web", "latency" match line 2.
+        let with_intent = extract_snippet(
+            &body,
+            "performance metrics",
+            Some(500),
+            None,
+            None,
+            Some("web latency and page speed"),
+        );
+        assert!(with_intent.snippet.contains("web latency"));
+    }
+
+    // --- intent constant (intent.test.ts:506-508) ---
+
+    #[test]
+    fn intent_weight_snippet_is_0_3() {
+        assert_eq!(INTENT_WEIGHT_SNIPPET, 0.3);
+    }
 }
