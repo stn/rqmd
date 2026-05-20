@@ -1635,6 +1635,7 @@ dependencies = [
  "bytemuck",
  "dirs 5.0.1",
  "encoding_rs",
+ "form_urlencoded",
  "futures",
  "globset",
  "hf-hub",

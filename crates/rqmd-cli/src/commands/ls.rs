@@ -5,7 +5,7 @@
 use anyhow::{anyhow, Result};
 use rqmd_core::db::params;
 use rqmd_core::store::context::list_collections;
-use rqmd_core::store::virtual_path::parse_virtual_path;
+use rqmd_core::store::virtual_path::{is_virtual_path, parse_virtual_path};
 
 use crate::cli::LsArgs;
 use crate::color::Palette;
@@ -128,12 +128,12 @@ pub fn run(a: LsArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
 }
 
 /// Parse a `ls` argument into `(collection_name, optional_path_prefix)`.
-/// Supports `qmd://name/...`, `name`, and `name/sub/path`.
+/// Supports `qmd://name/...`, `//name/...`, `name`, and `name/sub/path`.
 fn resolve_collection_arg(
     arg: &str,
     known: &[rqmd_core::store::context::CollectionListing],
 ) -> Result<(String, Option<String>)> {
-    if arg.starts_with("qmd://") {
+    if is_virtual_path(arg) {
         let vp = parse_virtual_path(arg).map_err(|_| anyhow!("Invalid virtual path: {arg}"))?;
         let prefix = if vp.path.is_empty() {
             None
