@@ -12,13 +12,35 @@
 //! indicate a fatal environment problem (no GPU drivers, etc.) that the
 //! caller cannot recover from.
 
-use std::sync::OnceLock;
+use std::sync::{Once, OnceLock};
 
 use llama_cpp_2::llama_backend::LlamaBackend;
+use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 
 use crate::llm::error::{Error, Result};
 
 static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
+
+/// Guards the one-shot install of the native log callback.
+static LOG_REDIRECT: Once = Once::new();
+
+/// Route llama.cpp + ggml native C logs into the `tracing` ecosystem.
+///
+/// Without this, llama.cpp logs via a default callback that writes straight
+/// to the C `stderr` (`llama_context:`, `sched_reserve:`, `decode: ...`).
+/// That bypasses both Rust's `print!` capture and `tracing`, so the noise
+/// shows up even under `cargo test`. Sending it to `tracing` instead means
+/// the output obeys the process log level — and stays silent in tests, which
+/// install no subscriber.
+///
+/// Idempotent and safe to call before `LlamaBackend::init()` (it only sets
+/// global C function pointers), so we install it as early as possible to also
+/// capture backend-init chatter.
+fn install_log_redirect() {
+    LOG_REDIRECT.call_once(|| {
+        send_logs_to_tracing(LogOptions::default());
+    });
+}
 
 /// Get the shared `LlamaBackend`, initializing it on the first call.
 /// Panics if initialization fails (see [`try_get`] for a fallible version).
@@ -32,6 +54,8 @@ pub fn try_get() -> Result<&'static LlamaBackend> {
     if let Some(b) = BACKEND.get() {
         return Ok(b);
     }
+    // Install before init so backend-enumeration logs are captured too.
+    install_log_redirect();
     match LlamaBackend::init() {
         Ok(b) => Ok(BACKEND.get_or_init(|| b)),
         Err(e) => {
