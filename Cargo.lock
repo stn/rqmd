@@ -1613,20 +1613,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmd-cli"
+name = "rqmd-cli"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
- "rmd-core",
- "rmd-mcp",
+ "rqmd-core",
+ "rqmd-mcp",
  "serde",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
-name = "rmd-core"
+name = "rqmd-core"
 version = "0.0.1"
 dependencies = [
  "anyhow",
@@ -1664,10 +1664,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmd-mcp"
+name = "rqmd-mcp"
 version = "0.0.1"
 dependencies = [
- "rmd-core",
+ "rqmd-core",
 ]
 
 [[package]]

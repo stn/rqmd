@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/rmd-core",
-    "crates/rmd-mcp",
-    "crates/rmd-cli",
+    "crates/rqmd-core",
+    "crates/rqmd-mcp",
+    "crates/rqmd-cli",
 ]
 
 [workspace.package]
@@ -11,12 +11,12 @@ version     = "0.0.1"
 edition     = "2024"
 license     = "MIT"
 authors     = ["Akira Ishino <akira@lumilab.jp>"]
-repository  = "https://github.com/stn/rmd"
+repository  = "https://github.com/stn/rqmd"
 description = "Rust port of tobi/qmd — on-device hybrid search for markdown"
 
 [workspace.dependencies]
-rmd-core = { path = "crates/rmd-core", version = "0.0.1" }
-rmd-mcp  = { path = "crates/rmd-mcp",  version = "0.0.1" }
+rqmd-core = { path = "crates/rqmd-core", version = "0.0.1" }
+rqmd-mcp  = { path = "crates/rqmd-mcp",  version = "0.0.1" }
 
 serde      = { version = "1", features = ["derive"] }
 indexmap   = { version = "2", features = ["serde"] }

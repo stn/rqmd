@@ -1,4 +1,4 @@
-# rmd
+# rqmd
 
 Rust port of [tobi/qmd](https://github.com/tobi/qmd) — an on-device hybrid search
 engine for markdown that combines BM25 (SQLite FTS5), vector semantic search, and
@@ -11,15 +11,15 @@ local LLM re-ranking.
 
 | Crate       | Role                                                                       | Maps to (qmd)                                           |
 |-------------|----------------------------------------------------------------------------|---------------------------------------------------------|
-| `rmd-core`  | Search engine core — store, db, chunking, collections, AST, LLM, store-ops | `src/store.ts`, `src/db.ts`, `src/ast.ts`, `src/llm.ts` |
-| `rmd-mcp`   | MCP server (library, launched via `rmd mcp`)                               | `src/mcp/server.ts`                                     |
-| `rmd-cli`   | CLI binary (`rmd`) — subcommands `search`, `mcp`, etc.                     | `src/cli/qmd.ts`                                        |
+| `rqmd-core`  | Search engine core — store, db, chunking, collections, AST, LLM, store-ops | `src/store.ts`, `src/db.ts`, `src/ast.ts`, `src/llm.ts` |
+| `rqmd-mcp`   | MCP server (library, launched via `rqmd mcp`)                               | `src/mcp/server.ts`                                     |
+| `rqmd-cli`   | CLI binary (`rqmd`) — subcommands `search`, `mcp`, etc.                     | `src/cli/qmd.ts`                                        |
 
 ## Build
 
 ```sh
 cargo build --workspace
-cargo run --bin rmd
+cargo run --bin rqmd
 ```
 
 ## License
