@@ -349,46 +349,153 @@ pub fn search_fts(
 mod tests {
     use super::*;
 
+    /// Display string of a validator error, for `.contains(...)` parity with
+    /// the TS `.toContain(...)` assertions.
+    fn err_msg(r: Result<()>) -> String {
+        r.unwrap_err().to_string()
+    }
+
+    // =========================================================================
+    // validateSemanticQuery — ported from structured-search.test.ts
+    // `describe("validateSemanticQuery")` (lines 357-431). TS returns null on
+    // accept / a string containing "Negation" on reject; we mirror with
+    // is_ok() / err message contains "Negation".
+    // =========================================================================
+
     #[test]
-    fn validate_lex_rejects_newlines() {
-        assert!(validate_lex_query("a\nb").is_err());
-        assert!(validate_lex_query("ok").is_ok());
+    fn semantic_accepts_plain_natural_language() {
+        assert!(validate_semantic_query("how does error handling work").is_ok());
+        assert!(validate_semantic_query("what is the CAP theorem").is_ok());
     }
 
     #[test]
-    fn validate_lex_rejects_unbalanced_quotes() {
-        assert!(validate_lex_query("\"open").is_err());
-        assert!(validate_lex_query("\"closed\"").is_ok());
+    fn semantic_rejects_negation_at_start() {
+        assert!(err_msg(validate_semantic_query("-redis connection pooling")).contains("Negation"));
     }
 
     #[test]
-    fn validate_semantic_rejects_negation() {
-        assert!(validate_semantic_query("-bad").is_err());
-        assert!(validate_semantic_query("hello -bad").is_err());
-        // Hyphenated mid-word is fine.
-        assert!(validate_semantic_query("real-time updates").is_ok());
+    fn semantic_rejects_negation_after_space() {
+        assert!(err_msg(validate_semantic_query("performance -sports")).contains("Negation"));
     }
 
     #[test]
-    fn build_fts5_plain_terms() {
-        assert_eq!(build_fts5_query("hello").as_deref(), Some("\"hello\"*"));
-        assert_eq!(
-            build_fts5_query("hello world").as_deref(),
-            Some("\"hello\"* AND \"world\"*")
+    fn semantic_rejects_negated_quoted_phrase() {
+        assert!(err_msg(validate_semantic_query("-\"exact phrase\"")).contains("Negation"));
+    }
+
+    #[test]
+    fn semantic_rejects_multiple_negations() {
+        assert!(
+            err_msg(validate_semantic_query("error handling -java -python")).contains("Negation")
         );
     }
 
     #[test]
-    fn build_fts5_negation_needs_positive() {
-        assert!(build_fts5_query("-only").is_none());
+    fn semantic_rejects_negation_after_leading_whitespace() {
+        assert!(err_msg(validate_semantic_query("  -term at start")).contains("Negation"));
+    }
+
+    #[test]
+    fn semantic_rejects_negation_after_tab() {
+        assert!(err_msg(validate_semantic_query("foo\t-bar")).contains("Negation"));
+    }
+
+    #[test]
+    fn semantic_accepts_hyphenated_compound_words() {
+        assert!(validate_semantic_query("long-lived server shared across clients").is_ok());
+        assert!(validate_semantic_query("real-time voice processing pipeline").is_ok());
+        assert!(validate_semantic_query("how does the rate-limiter handle burst traffic").is_ok());
+        assert!(validate_semantic_query("self-hosted deployment options").is_ok());
+        assert!(validate_semantic_query("multi-client session architecture").is_ok());
+        assert!(validate_semantic_query("cross-platform compatibility").is_ok());
+        assert!(validate_semantic_query("non-blocking I/O model").is_ok());
+        assert!(validate_semantic_query("in-memory caching strategy").is_ok());
+        assert!(validate_semantic_query("write-ahead log for crash recovery").is_ok());
+        assert!(validate_semantic_query("copy-on-write semantics").is_ok());
+    }
+
+    #[test]
+    fn semantic_accepts_multiple_hyphens_in_a_phrase() {
+        assert!(validate_semantic_query("state-of-the-art embedding models").is_ok());
+        assert!(validate_semantic_query("end-to-end testing").is_ok());
+        assert!(validate_semantic_query("man-in-the-middle attack prevention").is_ok());
+    }
+
+    #[test]
+    fn semantic_accepts_multiple_hyphenated_words_in_one_query() {
+        assert!(validate_semantic_query("built-in vs add-on features").is_ok());
+    }
+
+    #[test]
+    fn semantic_accepts_short_hyphenated_terms() {
+        assert!(validate_semantic_query("A-B testing for ML models").is_ok());
+        assert!(validate_semantic_query("e-commerce platform").is_ok());
+    }
+
+    #[test]
+    fn semantic_accepts_bare_hyphen_without_word_character() {
+        assert!(validate_semantic_query("-").is_ok());
+    }
+
+    #[test]
+    fn semantic_accepts_hyde_style_hypothetical_answers() {
+        assert!(validate_semantic_query(
+            "The CAP theorem states that a distributed system cannot simultaneously provide consistency, availability, and partition tolerance."
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn semantic_accepts_hyde_with_hyphenated_words() {
+        assert!(validate_semantic_query(
+            "HTTP transport runs a single long-lived daemon shared across all clients, avoiding per-session model re-loading."
+        )
+        .is_ok());
+    }
+
+    // =========================================================================
+    // validateLexQuery — ported from structured-search.test.ts
+    // `describe("validateLexQuery")` (lines 433-445).
+    // =========================================================================
+
+    #[test]
+    fn lex_accepts_basic_query() {
+        assert!(validate_lex_query("auth token").is_ok());
+    }
+
+    #[test]
+    fn lex_rejects_newline() {
+        assert!(err_msg(validate_lex_query("foo\nbar")).contains("single line"));
+    }
+
+    #[test]
+    fn lex_rejects_unmatched_quote() {
+        assert!(err_msg(validate_lex_query("\"unfinished")).contains("unmatched"));
+    }
+
+    // =========================================================================
+    // buildFTS5Query — ported from structured-search.test.ts
+    // `describe("buildFTS5Query (lex parser)")` (lines 452-594).
+    // =========================================================================
+
+    #[test]
+    fn build_fts5_plain_terms_and() {
         assert_eq!(
-            build_fts5_query("good -bad").as_deref(),
-            Some("\"good\"* NOT \"bad\"*")
+            build_fts5_query("foo bar").as_deref(),
+            Some("\"foo\"* AND \"bar\"*")
         );
     }
 
     #[test]
-    fn build_fts5_phrase() {
+    fn build_fts5_single_term() {
+        assert_eq!(
+            build_fts5_query("performance").as_deref(),
+            Some("\"performance\"*")
+        );
+    }
+
+    #[test]
+    fn build_fts5_quoted_phrase_exact() {
         assert_eq!(
             build_fts5_query("\"machine learning\"").as_deref(),
             Some("\"machine learning\"")
@@ -396,8 +503,130 @@ mod tests {
     }
 
     #[test]
-    fn build_fts5_hyphenated() {
-        let q = build_fts5_query("multi-agent").unwrap();
-        assert_eq!(q, "\"multi agent\"");
+    fn build_fts5_quoted_phrase_mixed_case_sanitized() {
+        assert_eq!(
+            build_fts5_query("\"C++ performance\"").as_deref(),
+            Some("\"c performance\"")
+        );
+    }
+
+    #[test]
+    fn build_fts5_negation_of_term() {
+        assert_eq!(
+            build_fts5_query("performance -sports").as_deref(),
+            Some("\"performance\"* NOT \"sports\"*")
+        );
+    }
+
+    #[test]
+    fn build_fts5_negation_of_phrase() {
+        assert_eq!(
+            build_fts5_query("performance -\"sports athlete\"").as_deref(),
+            Some("\"performance\"* NOT \"sports athlete\"")
+        );
+    }
+
+    #[test]
+    fn build_fts5_multiple_negations() {
+        assert_eq!(
+            build_fts5_query("performance -sports -athlete").as_deref(),
+            Some("\"performance\"* NOT \"sports\"* NOT \"athlete\"*")
+        );
+    }
+
+    #[test]
+    fn build_fts5_quoted_positive_plus_negation() {
+        assert_eq!(
+            build_fts5_query("\"machine learning\" -sports -athlete").as_deref(),
+            Some("\"machine learning\" NOT \"sports\"* NOT \"athlete\"*")
+        );
+    }
+
+    #[test]
+    fn build_fts5_intent_aware_cpp_example() {
+        let result = build_fts5_query("\"C++ performance\" optimization -sports -athlete").unwrap();
+        assert!(result.contains("NOT \"sports\"*"));
+        assert!(result.contains("NOT \"athlete\"*"));
+        assert!(result.contains("\"optimization\"*"));
+    }
+
+    #[test]
+    fn build_fts5_only_negations_is_none() {
+        assert!(build_fts5_query("-sports -athlete").is_none());
+    }
+
+    #[test]
+    fn build_fts5_empty_is_none() {
+        assert!(build_fts5_query("").is_none());
+        assert!(build_fts5_query("   ").is_none());
+    }
+
+    #[test]
+    fn build_fts5_special_chars_stripped() {
+        assert_eq!(
+            build_fts5_query("hello!world").as_deref(),
+            Some("\"helloworld\"*")
+        );
+    }
+
+    #[test]
+    fn build_fts5_hyphenated_term_phrase() {
+        assert_eq!(
+            build_fts5_query("multi-agent").as_deref(),
+            Some("\"multi agent\"")
+        );
+    }
+
+    #[test]
+    fn build_fts5_hyphenated_identifier_phrase() {
+        assert_eq!(
+            build_fts5_query("DEC-0054").as_deref(),
+            Some("\"dec 0054\"")
+        );
+    }
+
+    #[test]
+    fn build_fts5_hyphenated_model_name_phrase() {
+        assert_eq!(build_fts5_query("gpt-4").as_deref(), Some("\"gpt 4\""));
+    }
+
+    #[test]
+    fn build_fts5_multi_hyphen_phrase() {
+        assert_eq!(
+            build_fts5_query("foo-bar-baz").as_deref(),
+            Some("\"foo bar baz\"")
+        );
+    }
+
+    #[test]
+    fn build_fts5_hyphenated_mixed_with_plain() {
+        assert_eq!(
+            build_fts5_query("multi-agent memory").as_deref(),
+            Some("\"multi agent\" AND \"memory\"*")
+        );
+    }
+
+    #[test]
+    fn build_fts5_negation_alongside_hyphenated() {
+        assert_eq!(
+            build_fts5_query("multi-agent -sports").as_deref(),
+            Some("\"multi agent\" NOT \"sports\"*")
+        );
+    }
+
+    #[test]
+    fn build_fts5_negated_hyphenated_term() {
+        assert_eq!(
+            build_fts5_query("performance -multi-agent").as_deref(),
+            Some("\"performance\"* NOT \"multi agent\"")
+        );
+    }
+
+    #[test]
+    fn build_fts5_plain_negation_not_confused_with_hyphen() {
+        assert_eq!(
+            build_fts5_query("performance -sports").as_deref(),
+            Some("\"performance\"* NOT \"sports\"*")
+        );
     }
 }

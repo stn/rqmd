@@ -14,8 +14,9 @@ use crate::store::embeddings::search_vec_with_embedding;
 use crate::store::rrf::{
     build_rrf_trace, reciprocal_rank_fusion, QueryType, RankedListMeta,
 };
-use crate::store::schema::{validate_lex_query, validate_semantic_query};
-use crate::store::search::{search_fts, RankedResult, SearchSource};
+use crate::store::search::{
+    search_fts, validate_lex_query, validate_semantic_query, RankedResult, SearchSource,
+};
 use crate::store::Store;
 use crate::store::RERANK_CANDIDATE_LIMIT;
 

@@ -614,4 +614,107 @@ mod tests {
             .expect("structured");
         assert_eq!(parsed.intent.as_deref(), Some("web performance: LCP, FID, CLS"));
     }
+
+    // =========================================================================
+    // Remaining cases ported from structured-search.test.ts
+    // `describe("parseStructuredQuery")` (lines 79-253). The TS inline parser
+    // is intent-unaware; rqmd's parser is the real (intent-aware) port, so the
+    // "missing prefix" message reads `lex:/vec:/hyde:/intent:` — the TS regex
+    // `/missing a lex:\/vec:\/hyde:/` still matches it as a substring.
+    // =========================================================================
+
+    #[test]
+    fn all_three_types() {
+        let parsed = parse("lex: keywords\nvec: question\nhyde: hypothetical doc")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.searches.len(), 3);
+        assert_eq!(parsed.searches[0].type_, ExpandedQueryType::Lex);
+        assert_eq!(parsed.searches[0].query, "keywords");
+        assert_eq!(parsed.searches[1].type_, ExpandedQueryType::Vec);
+        assert_eq!(parsed.searches[1].query, "question");
+        assert_eq!(parsed.searches[2].type_, ExpandedQueryType::Hyde);
+        assert_eq!(parsed.searches[2].query, "hypothetical doc");
+    }
+
+    #[test]
+    fn duplicate_types_allowed() {
+        let parsed = parse("lex: term1\nlex: term2\nlex: term3")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.searches.len(), 3);
+        assert!(parsed
+            .searches
+            .iter()
+            .all(|s| s.type_ == ExpandedQueryType::Lex));
+        assert_eq!(parsed.searches[0].query, "term1");
+        assert_eq!(parsed.searches[1].query, "term2");
+        assert_eq!(parsed.searches[2].query, "term3");
+    }
+
+    #[test]
+    fn order_preserved() {
+        let parsed = parse("hyde: passage\nvec: question\nlex: keywords")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.searches[0].type_, ExpandedQueryType::Hyde);
+        assert_eq!(parsed.searches[1].type_, ExpandedQueryType::Vec);
+        assert_eq!(parsed.searches[2].type_, ExpandedQueryType::Lex);
+    }
+
+    #[test]
+    fn uppercase_lex_and_vec_prefixes() {
+        let lex = parse("LEX: keywords").unwrap().expect("structured");
+        assert_eq!(lex.searches[0].type_, ExpandedQueryType::Lex);
+        assert_eq!(lex.searches[0].query, "keywords");
+        let vec = parse("VEC: question").unwrap().expect("structured");
+        assert_eq!(vec.searches[0].type_, ExpandedQueryType::Vec);
+        assert_eq!(vec.searches[0].query, "question");
+    }
+
+    #[test]
+    fn mixed_case_prefixes() {
+        let lex = parse("Lex: test").unwrap().expect("structured");
+        assert_eq!(lex.searches[0].type_, ExpandedQueryType::Lex);
+        let vec = parse("VeC: test").unwrap().expect("structured");
+        assert_eq!(vec.searches[0].type_, ExpandedQueryType::Vec);
+    }
+
+    #[test]
+    fn internal_whitespace_preserved() {
+        let parsed = parse("lex:   multiple   spaces   ")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.searches[0].query, "multiple   spaces");
+    }
+
+    #[test]
+    fn prefix_like_text_in_query_preserved() {
+        let parsed = parse("vec: what does lex: mean")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.searches[0].type_, ExpandedQueryType::Vec);
+        assert_eq!(parsed.searches[0].query, "what does lex: mean");
+    }
+
+    #[test]
+    fn multiple_plain_lines_error() {
+        let err = parse("line one\nline two").unwrap_err();
+        assert!(err.to_string().contains("missing a lex:/vec:/hyde:"));
+    }
+
+    #[test]
+    fn three_plain_lines_error() {
+        let err = parse("a\nb\nc").unwrap_err();
+        assert!(err.to_string().contains("missing a lex:/vec:/hyde:"));
+    }
+
+    #[test]
+    fn newline_in_hyde_passage_single_line() {
+        let parsed = parse("hyde: The answer is X. It means Y.")
+            .unwrap()
+            .expect("structured");
+        assert_eq!(parsed.searches[0].type_, ExpandedQueryType::Hyde);
+        assert_eq!(parsed.searches[0].query, "The answer is X. It means Y.");
+    }
 }

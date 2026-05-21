@@ -99,22 +99,9 @@ pub fn sanitize_fts5_phrase(phrase: &str) -> String {
         .join(" ")
 }
 
-/// Validate a lexical (FTS) query. Currently a stub that accepts any
-/// non-empty query — exists so future SQL syntax checks live in one place.
-pub fn validate_lex_query(query: &str) -> Result<()> {
-    if query.trim().is_empty() {
-        return Err(super::Error::InvalidQuery("empty query".into()));
-    }
-    Ok(())
-}
-
-/// Validate a semantic (vector) query. Stub for forward compatibility.
-pub fn validate_semantic_query(query: &str) -> Result<()> {
-    if query.trim().is_empty() {
-        return Err(super::Error::InvalidQuery("empty query".into()));
-    }
-    Ok(())
-}
+// Note: `validate_lex_query` / `validate_semantic_query` live in
+// `crate::store::search` (alongside `build_fts5_query` and the FTS sanitizers),
+// not here. Do not re-add stub validators in this module.
 
 // ============================================================================
 // Schema initialisation

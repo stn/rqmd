@@ -234,6 +234,124 @@ async fn structured_search_first_list_gets_2x_weight() {
     );
 }
 
+// =============================================================================
+// Ported from structured-search.test.ts `describe("structuredSearch")`
+// (structured-search.test.ts:283-348). "throws when lex query contains newline"
+// is already covered by `structured_search_rejects_newlines_in_query` above and
+// is not duplicated here.
+// =============================================================================
+
+#[tokio::test]
+async fn structured_search_returns_empty_for_empty_searches() {
+    let (_t, store) = open_seeded();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+    let searches: Vec<ExpandedQuery> = vec![];
+    let r = structured_search(&store, llm, &searches, StructuredSearchOptions::default())
+        .await
+        .unwrap();
+    assert!(r.is_empty());
+}
+
+#[tokio::test]
+async fn structured_search_returns_empty_when_no_match() {
+    let (_t, store) = open_seeded();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+    // Non-hyphenated term → plain prefix-match path (no document contains it).
+    let searches = vec![ExpandedQuery {
+        type_: ExpandedQueryType::Lex,
+        query: "nonexistentxyz123".into(),
+        line: None,
+    }];
+    let r = structured_search(&store, llm, &searches, StructuredSearchOptions::default())
+        .await
+        .unwrap();
+    assert!(r.is_empty());
+}
+
+#[tokio::test]
+async fn structured_search_accepts_lex_search_type() {
+    // vec/hyde require embeddings, so (like the TS case) only lex is exercised.
+    // Input is "alpha" rather than TS's "test" so it actually matches a fixture
+    // doc — a strictly stronger check than TS's resolves.toBeDefined().
+    let (_t, store) = open_seeded();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+    let searches = vec![ExpandedQuery {
+        type_: ExpandedQueryType::Lex,
+        query: "alpha".into(),
+        line: None,
+    }];
+    let r = structured_search(&store, llm, &searches, StructuredSearchOptions::default()).await;
+    assert!(r.is_ok());
+}
+
+#[tokio::test]
+async fn structured_search_respects_limit_option() {
+    let (_t, store) = open_seeded();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+    let searches = vec![ExpandedQuery {
+        type_: ExpandedQueryType::Lex,
+        query: "alpha".into(),
+        line: None,
+    }];
+    let opts = StructuredSearchOptions {
+        limit: Some(5),
+        skip_rerank: true,
+        ..Default::default()
+    };
+    let r = structured_search(&store, llm, &searches, opts).await.unwrap();
+    assert!(r.len() <= 5);
+}
+
+#[tokio::test]
+async fn structured_search_respects_min_score_option() {
+    // skip_rerank makes the score deterministic (1.0/rank). "alpha" hits a.md
+    // at rank 1 → score 1.0, so a 0.5 floor keeps a non-empty set (the floor
+    // is exercised against real hits, not an empty list).
+    let (_t, store) = open_seeded();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+    let searches = vec![ExpandedQuery {
+        type_: ExpandedQueryType::Lex,
+        query: "alpha".into(),
+        line: None,
+    }];
+    let opts = StructuredSearchOptions {
+        min_score: Some(0.5),
+        skip_rerank: true,
+        ..Default::default()
+    };
+    let r = structured_search(&store, llm, &searches, opts).await.unwrap();
+    assert!(!r.is_empty(), "expected at least one hit above the score floor");
+    for hit in &r {
+        assert!(hit.score >= 0.5, "score {} below floor", hit.score);
+    }
+}
+
+#[tokio::test]
+async fn structured_search_rejects_unmatched_quote() {
+    // Regression: structured_search must run the real validate_lex_query
+    // (search.rs), not the old schema.rs stub, so an unmatched double quote is
+    // rejected. Mirrors structured-search.test.ts:343-347 (/unmatched double quote/).
+    let (_t, store) = open_seeded();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+    let searches = vec![ExpandedQuery {
+        type_: ExpandedQueryType::Lex,
+        query: "\"unfinished phrase".into(),
+        line: Some(2),
+    }];
+    let err = structured_search(&store, llm, &searches, StructuredSearchOptions::default())
+        .await
+        .expect_err("unmatched quote should be rejected");
+    let msg = format!("{err}");
+    assert!(msg.contains("Line 2"), "{msg}");
+    assert!(msg.to_lowercase().contains("unmatched"), "{msg}");
+}
+
 /// Ported from store.test.ts: "hybrid RRF weights boost original vector
 /// evidence over expansion-only hits". `get_hybrid_rrf_weights` assigns 2.0
 /// to original-query lists and 1.0 to expansion lists, regardless of source.
