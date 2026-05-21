@@ -32,6 +32,11 @@ tokio      = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 [dev-dependencies]
 # `collection_filter` unit tests build a YAML-backed `Config` on a temp path.
 tempfile   = { workspace = true }
+# E2E CLI tests (`tests/cli.rs`) spawn the built `rqmd` binary via
+# `Command::cargo_bin("rqmd")` and assert on stdout/stderr/exit code. This is
+# the Rust port of qmd's `test/cli.test.ts`. `serde_json` (a normal dependency
+# above) is reused in the tests for JSON-format assertions.
+assert_cmd = "2"
 
 [features]
 # GPU backends re-exported from rqmd-core so users can invoke `cargo build -p

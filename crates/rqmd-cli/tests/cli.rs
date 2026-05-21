@@ -1,0 +1,1183 @@
+//! E2E CLI integration tests — Rust port of qmd's `test/cli.test.ts`.
+//!
+//! Each test spawns the built `rqmd` binary against an isolated temp index +
+//! config (see `common`), mirroring qmd's `runQmd()` process-spawn approach.
+//!
+//! Scope: the portable subset of `cli.test.ts`. Out of scope because the
+//! feature is absent in rqmd (declared in `src/cli.rs`): the `skill`/`skills`
+//! commands, the editor-URI/`termLink` helpers, and the `mcp` daemon/stdio
+//! suites. A handful of qmd tests are dropped where rqmd's behaviour
+//! deliberately differs (noted at each call site).
+//!
+//! Where rqmd's wording / exit codes diverge from qmd, the assertions follow
+//! rqmd's actual output (clap parse errors exit 2; app errors exit 1; the
+//! default search format uses bare `collection/path` while JSON uses `qmd://`).
+
+mod common;
+
+// ===========================================================================
+// CLI Help
+// ===========================================================================
+mod cli_help {
+    use crate::common::*;
+
+    #[test]
+    fn shows_help_with_help_flag() {
+        let e = env();
+        let out = e.run_bare(&["--help"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Usage:"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("collection"));
+        assert!(out.stdout.contains("search"));
+        assert!(out.stdout.contains("--no-gpu"));
+        // (qmd's "qmd collection add" / "qmd skill show/install" lines have no
+        // rqmd equivalent — clap renders a `Commands:` list instead.)
+    }
+
+    #[test]
+    fn shows_usage_with_no_arguments() {
+        let e = env();
+        // clap requires a subcommand → parse error on stderr, exit code 2
+        // (qmd printed usage to stdout with exit 1).
+        let out = e.run_bare(&[]);
+        out.assert_err();
+        assert!(out.stderr.contains("Usage:"), "stderr: {}", out.stderr);
+    }
+}
+
+// ===========================================================================
+// CLI Embed (flag validation only — model-free, fails before any load)
+// ===========================================================================
+mod cli_embed {
+    use crate::common::*;
+
+    #[test]
+    fn rejects_invalid_max_docs_per_batch() {
+        let e = env();
+        let out = e.run(&["embed", "--max-docs-per-batch", "0"]);
+        out.assert_err();
+        assert!(
+            out.stderr.contains("maxDocsPerBatch"),
+            "stderr: {}",
+            out.stderr
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_max_batch_mb() {
+        let e = env();
+        let out = e.run(&["embed", "--max-batch-mb", "0"]);
+        out.assert_err();
+        assert!(
+            out.stderr.contains("maxBatchBytes"),
+            "stderr: {}",
+            out.stderr
+        );
+    }
+}
+
+// ===========================================================================
+// CLI Add Command
+// ===========================================================================
+mod cli_add {
+    use crate::common::*;
+
+    #[test]
+    fn adds_files_from_current_directory() {
+        let e = env();
+        let out = e.run(&["collection", "add", "."]);
+        out.assert_ok();
+        // qmd asserts "Collection:" / "Indexed:"; rqmd prints "Creating
+        // collection 'fixtures'..." + "Indexed: …".
+        assert!(out.stdout.contains("Creating collection"));
+        assert!(out.stdout.contains("Indexed:"));
+    }
+
+    #[test]
+    fn adds_files_with_custom_glob_pattern() {
+        let e = env();
+        let out = e.run(&["collection", "add", ".", "--mask", "notes/*.md"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Indexed:"));
+        // rqmd's add output does not echo the mask; verify via `collection list`.
+        let list = e.run(&["collection", "list"]);
+        list.assert_ok();
+        assert!(list.stdout.contains("notes/*.md"), "list: {}", list.stdout);
+    }
+
+    #[test]
+    fn can_recreate_collection_with_remove_and_add() {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e.run(&["collection", "remove", "fixtures"]).assert_ok();
+        let out = e.run(&["collection", "add", "."]);
+        out.assert_ok();
+        assert!(
+            out.stdout
+                .contains("Collection 'fixtures' created successfully"),
+            "stdout: {}",
+            out.stdout
+        );
+    }
+}
+
+// ===========================================================================
+// CLI Status Command
+// ===========================================================================
+mod cli_status {
+    use crate::common::*;
+
+    #[test]
+    fn shows_index_status() {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        let out = e.run(&["status"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Collection"), "stdout: {}", out.stdout);
+    }
+    // qmd's "shows device mode" test is dropped: rqmd's status has no
+    // device-probe section (status.rs prints "device probe not yet implemented").
+}
+
+// ===========================================================================
+// CLI Search Command
+// ===========================================================================
+mod cli_search {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn searches_for_documents_with_bm25() {
+        let e = seeded();
+        let out = e.run(&["search", "meeting"]);
+        out.assert_ok();
+        assert!(out.stdout.to_lowercase().contains("meeting"));
+    }
+
+    #[test]
+    fn searches_with_limit_option() {
+        let e = seeded();
+        e.run(&["search", "-n", "1", "test"]).assert_ok();
+    }
+
+    #[test]
+    fn searches_with_all_results_option() {
+        let e = seeded();
+        e.run(&["search", "--all", "the"]).assert_ok();
+    }
+
+    #[test]
+    fn no_results_message_for_non_matching_query() {
+        let e = seeded();
+        let out = e.run(&["search", "xyznonexistent123"]);
+        out.assert_ok();
+        // rqmd prints "No results." to stderr (qmd put it on stdout).
+        assert!(out.stderr.contains("No results"), "stderr: {}", out.stderr);
+    }
+
+    #[test]
+    fn empty_json_array_for_non_matching_query() {
+        let e = seeded();
+        let out = e.run(&["search", "--json", "xyznonexistent123"]);
+        out.assert_ok();
+        assert_eq!(out.stdout.trim(), "[]");
+    }
+
+    #[test]
+    fn csv_header_only_for_non_matching_query() {
+        let e = seeded();
+        let out = e.run(&["search", "--csv", "xyznonexistent123"]);
+        out.assert_ok();
+        assert_eq!(
+            out.stdout.trim(),
+            "docid,score,file,title,context,line,snippet"
+        );
+    }
+
+    #[test]
+    fn empty_xml_for_non_matching_query() {
+        let e = seeded();
+        let out = e.run(&["search", "--xml", "xyznonexistent123"]);
+        out.assert_ok();
+        // rqmd emits no `<results>` wrapper for empty xml (qmd emitted
+        // `<results></results>`).
+        assert_eq!(out.stdout.trim(), "");
+    }
+
+    #[test]
+    fn empty_md_for_non_matching_query() {
+        let e = seeded();
+        let out = e.run(&["search", "--md", "xyznonexistent123"]);
+        out.assert_ok();
+        assert_eq!(out.stdout.trim(), "");
+    }
+
+    #[test]
+    fn empty_files_for_non_matching_query() {
+        let e = seeded();
+        let out = e.run(&["search", "--files", "xyznonexistent123"]);
+        out.assert_ok();
+        assert_eq!(out.stdout.trim(), "");
+    }
+
+    #[test]
+    fn min_score_filters_default_output() {
+        let e = seeded();
+        // Scores are normalised 0..1, so --min-score 2 filters everything.
+        let out = e.run(&["search", "--min-score", "2", "test"]);
+        out.assert_ok();
+        assert!(out.stderr.contains("No results"), "stderr: {}", out.stderr);
+    }
+
+    #[test]
+    fn min_score_format_safe_empty_output() {
+        let e = seeded();
+
+        let json = e.run(&["search", "--json", "--min-score", "2", "test"]);
+        json.assert_ok();
+        assert_eq!(json.stdout.trim(), "[]");
+
+        let csv = e.run(&["search", "--csv", "--min-score", "2", "test"]);
+        csv.assert_ok();
+        assert_eq!(
+            csv.stdout.trim(),
+            "docid,score,file,title,context,line,snippet"
+        );
+
+        let xml = e.run(&["search", "--xml", "--min-score", "2", "test"]);
+        xml.assert_ok();
+        assert_eq!(xml.stdout.trim(), "");
+
+        let md = e.run(&["search", "--md", "--min-score", "2", "test"]);
+        md.assert_ok();
+        assert_eq!(md.stdout.trim(), "");
+
+        let files = e.run(&["search", "--files", "--min-score", "2", "test"]);
+        files.assert_ok();
+        assert_eq!(files.stdout.trim(), "");
+    }
+
+    // qmd's "requires query argument" is dropped: rqmd treats an empty query
+    // as a no-match (exit 0, `[]`), it does not error.
+
+    #[test]
+    fn json_full_includes_line_field() {
+        let e = seeded();
+        let out = e.run(&["search", "--json", "--full", "-n", "1", "meeting"]);
+        out.assert_ok();
+        let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("valid json");
+        let arr = v.as_array().expect("array");
+        assert!(!arr.is_empty(), "expected at least one result");
+        assert!(arr[0]["line"].is_number());
+        assert!(arr[0]["line"].as_u64().unwrap() > 0);
+        assert!(arr[0]["body"].is_string());
+    }
+}
+
+// ===========================================================================
+// CLI Get Command
+// ===========================================================================
+mod cli_get {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn retrieves_document_content_by_path() {
+        let e = seeded();
+        let out = e.run(&["get", "README.md"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Test Project"));
+    }
+
+    #[test]
+    fn retrieves_document_from_subdirectory() {
+        let e = seeded();
+        let out = e.run(&["get", "notes/meeting.md"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Team Meeting"));
+    }
+
+    #[test]
+    fn handles_non_existent_file() {
+        let e = seeded();
+        let out = e.run(&["get", "nonexistent.md"]);
+        out.assert_code(1);
+    }
+
+    // qmd's "clamps negative --from" is dropped: rqmd's `--from` is unsigned,
+    // so `--from -19` is a clap parse error rather than a clamp.
+}
+
+// ===========================================================================
+// CLI Multi-Get Command
+// ===========================================================================
+mod cli_multi_get {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn retrieves_multiple_documents_by_pattern() {
+        let e = seeded();
+        let out = e.run(&["multi-get", "notes/*.md"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Meeting"));
+        assert!(out.stdout.contains("Ideas"));
+    }
+
+    #[test]
+    fn retrieves_documents_by_comma_separated_paths() {
+        let e = seeded();
+        let out = e.run(&["multi-get", "README.md,notes/meeting.md"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Test Project"));
+        assert!(out.stdout.contains("Team Meeting"));
+    }
+}
+
+// ===========================================================================
+// CLI Update Command
+// ===========================================================================
+mod cli_update {
+    use crate::common::*;
+
+    #[test]
+    fn updates_all_collections() {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        let out = e.run(&["update"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Updating"));
+    }
+
+    #[test]
+    fn deactivates_stale_docs_when_collection_has_zero_matching_files() {
+        let e = env();
+        let coll_dir = e.root.join("stale-coll");
+        std::fs::create_dir_all(&coll_dir).unwrap();
+        let doc = coll_dir.join("only.md");
+        let token = "stale-proof-token";
+        std::fs::write(
+            &doc,
+            format!("---\ndate: 2026-03-06\n---\n# Empty Collection Deactivation\n{token}\n"),
+        )
+        .unwrap();
+
+        let abs = e.yaml_path(&coll_dir);
+        e.run(&["collection", "add", &abs, "--name", "empty-check"])
+            .assert_ok();
+
+        let before = e.run(&["get", "qmd://empty-check/only.md"]);
+        before.assert_ok();
+        assert!(before.stdout.contains(token));
+
+        std::fs::remove_file(&doc).unwrap();
+
+        let update = e.run(&["update"]);
+        update.assert_ok();
+        assert!(
+            update
+                .stdout
+                .contains("0 new, 0 updated, 0 unchanged, 1 removed"),
+            "stdout: {}",
+            update.stdout
+        );
+
+        let after = e.run(&["get", "qmd://empty-check/only.md"]);
+        after.assert_code(1);
+    }
+}
+
+// ===========================================================================
+// CLI Add-Context Command
+// ===========================================================================
+mod cli_add_context {
+    use crate::common::*;
+
+    #[test]
+    fn adds_context_to_a_path() {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        let out = e.run(&[
+            "context",
+            "add",
+            "qmd://fixtures/",
+            "Personal notes and meeting logs",
+        ]);
+        out.assert_ok();
+        assert!(out.stdout.contains("✓ Added context"));
+    }
+
+    #[test]
+    fn requires_path_and_text_arguments() {
+        let e = env();
+        // clap: `args` is a required positional → parse error (exit 2) with usage.
+        let out = e.run(&["context", "add"]);
+        out.assert_err();
+        assert!(out.stderr.contains("Usage:"), "stderr: {}", out.stderr);
+    }
+}
+
+// ===========================================================================
+// CLI Cleanup Command
+// ===========================================================================
+mod cli_cleanup {
+    use crate::common::*;
+
+    #[test]
+    fn cleans_up_orphaned_entries() {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e.run(&["cleanup"]).assert_ok();
+    }
+}
+
+// ===========================================================================
+// CLI Error Handling
+// ===========================================================================
+mod cli_error_handling {
+    use crate::common::*;
+
+    #[test]
+    fn handles_unknown_command() {
+        let e = env();
+        let out = e.run(&["unknowncommand"]);
+        out.assert_err();
+        // clap's wording is "unrecognized subcommand" (qmd: "Unknown command").
+        assert!(
+            out.stderr.contains("unrecognized subcommand"),
+            "stderr: {}",
+            out.stderr
+        );
+    }
+
+    #[test]
+    fn uses_rqmd_index_path_environment_variable() {
+        let e = env();
+        let custom = e.root.join("custom.sqlite");
+        let out = e.run_env(
+            &["collection", "add", "."],
+            &[("RQMD_INDEX_PATH", custom.to_str().unwrap())],
+        );
+        out.assert_ok();
+        assert!(custom.exists(), "expected {} to exist", custom.display());
+    }
+}
+
+// ===========================================================================
+// CLI Output Formats
+// ===========================================================================
+mod cli_output_formats {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn search_json_outputs_json_array() {
+        let e = seeded();
+        let out = e.run(&["search", "--json", "test"]);
+        out.assert_ok();
+        let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("valid json");
+        assert!(v.is_array());
+    }
+
+    #[test]
+    fn search_files_outputs_file_paths() {
+        let e = seeded();
+        let out = e.run(&["search", "--files", "meeting"]);
+        out.assert_ok();
+        assert!(out.stdout.contains(".md"));
+    }
+
+    #[test]
+    fn search_output_includes_snippets_by_default() {
+        let e = seeded();
+        let out = e.run(&["search", "API"]);
+        out.assert_ok();
+        // "API" reliably matches docs/api.md, so results are non-empty and the
+        // default output names the path (containing "api"). "No results" would
+        // go to stderr; asserting unconditionally here catches an empty-stdout
+        // regression (qmd's original guarded this with `if !No results`).
+        assert!(!out.stdout.trim().is_empty(), "stderr: {}", out.stderr);
+        assert!(out.stdout.to_lowercase().contains("api"));
+    }
+}
+
+// ===========================================================================
+// CLI Search with Collection Filter
+// ===========================================================================
+mod cli_search_collection_filter {
+    use crate::common::*;
+
+    #[test]
+    fn filters_search_by_collection_name() {
+        let e = env();
+        e.run(&[
+            "collection",
+            "add",
+            ".",
+            "--name",
+            "notes",
+            "--mask",
+            "notes/*.md",
+        ])
+        .assert_ok();
+        e.run(&[
+            "collection",
+            "add",
+            ".",
+            "--name",
+            "docs",
+            "--mask",
+            "docs/*.md",
+        ])
+        .assert_ok();
+        let out = e.run(&["search", "-c", "notes", "meeting"]);
+        out.assert_ok();
+    }
+}
+
+// ===========================================================================
+// CLI Context Management
+// ===========================================================================
+mod cli_context_management {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn add_global_context() {
+        let e = seeded();
+        let out = e.run(&["context", "add", "/", "Global system context"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("✓ Set global context"));
+        assert!(out.stdout.contains("Global system context"));
+    }
+
+    #[test]
+    fn list_contexts() {
+        let e = seeded();
+        e.run(&["context", "add", "/", "Test context"]).assert_ok();
+        let out = e.run(&["context", "list"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Configured Contexts"));
+        assert!(out.stdout.contains("Test context"));
+    }
+
+    #[test]
+    fn add_context_to_virtual_path() {
+        let e = seeded();
+        let out = e.run(&[
+            "context",
+            "add",
+            "qmd://fixtures/notes",
+            "Context for notes subdirectory",
+        ]);
+        out.assert_ok();
+        assert!(out
+            .stdout
+            .contains("✓ Added context for: qmd://fixtures/notes"));
+    }
+
+    #[test]
+    fn remove_global_context() {
+        let e = seeded();
+        e.run(&["context", "add", "/", "Global context to remove"])
+            .assert_ok();
+        let out = e.run(&["context", "rm", "/"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("✓ Removed"));
+    }
+
+    #[test]
+    fn remove_virtual_path_context() {
+        let e = seeded();
+        e.run(&[
+            "context",
+            "add",
+            "qmd://fixtures/notes",
+            "Context to remove",
+        ])
+        .assert_ok();
+        let out = e.run(&["context", "rm", "qmd://fixtures/notes"]);
+        out.assert_ok();
+        assert!(out
+            .stdout
+            .contains("✓ Removed context for: qmd://fixtures/notes"));
+    }
+
+    #[test]
+    fn fails_to_remove_non_existent_context() {
+        let e = seeded();
+        let out = e.run(&["context", "rm", "qmd://nonexistent/path"]);
+        out.assert_code(1);
+        // rqmd's message is "No context found for: …" (contains "context found",
+        // not the bare "not found" qmd used).
+        assert!(
+            out.stderr.contains("No context found"),
+            "stderr: {}",
+            out.stderr
+        );
+    }
+}
+
+// ===========================================================================
+// CLI ls Command
+// ===========================================================================
+mod cli_ls {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn lists_all_collections() {
+        let e = seeded();
+        let out = e.run(&["ls"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Collections:"));
+        assert!(out.stdout.contains("qmd://fixtures/"));
+    }
+
+    #[test]
+    fn lists_files_in_a_collection() {
+        let e = seeded();
+        let out = e.run(&["ls", "fixtures"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("qmd://fixtures/README.md"));
+        assert!(out.stdout.contains("qmd://fixtures/notes/meeting.md"));
+    }
+
+    #[test]
+    fn lists_files_with_path_prefix() {
+        let e = seeded();
+        let out = e.run(&["ls", "fixtures/notes"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("qmd://fixtures/notes/meeting.md"));
+        assert!(out.stdout.contains("qmd://fixtures/notes/ideas.md"));
+        assert!(!out.stdout.contains("qmd://fixtures/README.md"));
+    }
+
+    #[test]
+    fn lists_files_with_virtual_path() {
+        let e = seeded();
+        let out = e.run(&["ls", "qmd://fixtures/docs"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("qmd://fixtures/docs/api.md"));
+    }
+
+    #[test]
+    fn normalizes_extra_slashes_for_virtual_paths() {
+        let e = seeded();
+        let out = e.run(&["ls", "qmd:///fixtures/docs"]);
+        out.assert_ok();
+        assert_eq!(out.stderr, "");
+        assert!(out.stdout.contains("qmd://fixtures/docs/api.md"));
+    }
+
+    #[test]
+    fn handles_non_existent_collection() {
+        let e = seeded();
+        let out = e.run(&["ls", "nonexistent"]);
+        out.assert_code(1);
+        assert!(out.stderr.contains("Collection not found"));
+    }
+
+    // qmd's two absolute-path ls tests (`ls qmd://<abs>/…` and the
+    // longest-prefix raw-path variant) are intentionally omitted:
+    //  * On Windows the absolute path's drive letter (`C:/…`) collides with
+    //    virtual-path parsing (it would be read as the collection name).
+    //  * The collection is registered only in YAML; `rqmd update` does not
+    //    sync a hand-written collection into the DB registry that `ls` reads,
+    //    so `ls` would report "Collection not found" without an extra resync
+    //    step (see `collection_ignore_patterns::status_shows_ignore_patterns`).
+}
+
+// ===========================================================================
+// CLI Collection Commands
+// ===========================================================================
+mod cli_collection {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn lists_collections() {
+        let e = seeded();
+        let out = e.run(&["collection", "list"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Collections"));
+        assert!(out.stdout.contains("fixtures"));
+        assert!(out.stdout.contains("qmd://fixtures/"));
+        assert!(out.stdout.contains("Pattern:"));
+        assert!(out.stdout.contains("Files:"));
+    }
+
+    #[test]
+    fn removes_a_collection() {
+        let e = seeded();
+        let before = e.run(&["collection", "list"]);
+        assert!(before.stdout.contains("fixtures"));
+
+        let out = e.run(&["collection", "remove", "fixtures"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("✓ Removed collection 'fixtures'"));
+        assert!(out.stdout.contains("Deleted"));
+
+        let after = e.run(&["collection", "list"]);
+        assert!(!after.stdout.contains("fixtures"));
+    }
+
+    #[test]
+    fn handles_removing_non_existent_collection() {
+        let e = seeded();
+        let out = e.run(&["collection", "remove", "nonexistent"]);
+        out.assert_code(1);
+        assert!(out.stderr.contains("Collection not found"));
+    }
+
+    #[test]
+    fn handles_missing_remove_argument() {
+        let e = seeded();
+        let out = e.run(&["collection", "remove"]);
+        out.assert_err();
+        assert!(out.stderr.contains("Usage:"), "stderr: {}", out.stderr);
+    }
+
+    #[test]
+    fn handles_unknown_subcommand() {
+        let e = seeded();
+        let out = e.run(&["collection", "invalid"]);
+        out.assert_err();
+        assert!(
+            out.stderr.contains("unrecognized subcommand"),
+            "stderr: {}",
+            out.stderr
+        );
+    }
+
+    #[test]
+    fn renames_a_collection() {
+        let e = seeded();
+        let before = e.run(&["collection", "list"]);
+        assert!(before.stdout.contains("qmd://fixtures/"));
+
+        let out = e.run(&["collection", "rename", "fixtures", "my-fixtures"]);
+        out.assert_ok();
+        assert!(out
+            .stdout
+            .contains("✓ Renamed collection 'fixtures' to 'my-fixtures'"));
+        assert!(out.stdout.contains("qmd://fixtures/"));
+        assert!(out.stdout.contains("qmd://my-fixtures/"));
+
+        let after = e.run(&["collection", "list"]);
+        assert!(after.stdout.contains("qmd://my-fixtures/"));
+        assert!(!after.stdout.contains("qmd://fixtures/"));
+    }
+
+    #[test]
+    fn handles_renaming_non_existent_collection() {
+        let e = seeded();
+        let out = e.run(&["collection", "rename", "nonexistent", "newname"]);
+        out.assert_code(1);
+        assert!(out.stderr.contains("Collection not found"));
+    }
+
+    #[test]
+    fn handles_renaming_to_existing_collection_name() {
+        let e = seeded();
+        let second = e.root.join("second-coll");
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(second.join("test.md"), "# Test\n").unwrap();
+        let abs = e.yaml_path(&second);
+        e.run(&["collection", "add", &abs, "--name", "second"])
+            .assert_ok();
+
+        let both = e.run(&["collection", "list"]);
+        assert!(both.stdout.contains("qmd://fixtures/"));
+        assert!(both.stdout.contains("qmd://second/"));
+
+        let out = e.run(&["collection", "rename", "fixtures", "second"]);
+        out.assert_code(1);
+        assert!(out.stderr.contains("Collection name already exists"));
+    }
+
+    #[test]
+    fn handles_missing_rename_arguments() {
+        let e = seeded();
+        let none = e.run(&["collection", "rename"]);
+        none.assert_err();
+        assert!(none.stderr.contains("Usage:"));
+
+        let one = e.run(&["collection", "rename", "fixtures"]);
+        one.assert_err();
+        assert!(one.stderr.contains("Usage:"));
+    }
+}
+
+// ===========================================================================
+// collection ignore patterns
+// ===========================================================================
+mod collection_ignore_patterns {
+    use crate::common::*;
+    use std::path::PathBuf;
+
+    /// Build the ignore-fixtures tree under the env root and return its path.
+    fn make_tree(e: &Env) -> PathBuf {
+        let dir = e.root.join("ignore-fixtures");
+        std::fs::create_dir_all(dir.join("notes")).unwrap();
+        std::fs::create_dir_all(dir.join("sessions").join("2026-03")).unwrap();
+        std::fs::create_dir_all(dir.join("archive")).unwrap();
+
+        std::fs::write(
+            dir.join("readme.md"),
+            "# Main readme\nThis should be indexed.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("notes").join("note1.md"),
+            "# Note 1\nThis is a personal note.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("sessions").join("session1.md"),
+            "# Session 1\nThis session should be ignored.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("sessions").join("2026-03").join("session2.md"),
+            "# Session 2\nNested session should also be ignored.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("archive").join("old.md"),
+            "# Old stuff\nThis archive file should be ignored.",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// Seed an env with the ignore-fixtures tree indexed via a hand-written
+    /// config that ignores `sessions/**` + `archive/**`, then `update`.
+    fn seeded_with_ignore() -> Env {
+        let e = env();
+        let dir = make_tree(&e);
+        let abs = e.yaml_path(&dir);
+        e.write_config(&format!(
+            "collections:\n  ignoretst:\n    path: \"{abs}\"\n    pattern: \"**/*.md\"\n    ignore:\n      - \"sessions/**\"\n      - \"archive/**\"\n"
+        ));
+        e.run_in(&dir, &["update"]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn ignore_patterns_exclude_matching_files() {
+        let e = env();
+        let dir = make_tree(&e);
+        let abs = e.yaml_path(&dir);
+        e.write_config(&format!(
+            "collections:\n  ignoretst:\n    path: \"{abs}\"\n    pattern: \"**/*.md\"\n    ignore:\n      - \"sessions/**\"\n      - \"archive/**\"\n"
+        ));
+        let out = e.run_in(&dir, &["update"]);
+        out.assert_ok();
+        // 2 indexed (readme.md + notes/note1.md), not 5.
+        assert!(out.stdout.contains("2 new"), "stdout: {}", out.stdout);
+    }
+
+    #[test]
+    fn ignored_files_are_not_searchable() {
+        let e = seeded_with_ignore();
+        let out = e.run(&["search", "-n", "10", "session"]);
+        out.assert_ok();
+        assert!(!out.stdout.contains("session1"));
+        assert!(!out.stdout.contains("session2"));
+    }
+
+    #[test]
+    fn non_ignored_files_are_searchable() {
+        let e = seeded_with_ignore();
+        let out = e.run(&["search", "-n", "10", "personal", "note"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("note1"), "stdout: {}", out.stdout);
+    }
+
+    #[test]
+    fn status_shows_ignore_patterns() {
+        let e = seeded_with_ignore();
+        // `collection list` reads the collection set from the DB registry
+        // (store_collections), which `update` does not populate for a
+        // hand-written YAML collection — only config mutations sync it. A
+        // no-op `collection include` triggers that sync while preserving the
+        // YAML `ignore:` list (Collection serializes `ignore`).
+        e.run(&["collection", "include", "ignoretst"]).assert_ok();
+        let out = e.run(&["collection", "list"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Ignore:"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("sessions/**"));
+        assert!(out.stdout.contains("archive/**"));
+    }
+
+    #[test]
+    fn collection_without_ignore_indexes_all_files() {
+        let e = env();
+        let dir = make_tree(&e);
+        let abs = e.yaml_path(&dir);
+        e.write_config(&format!(
+            "collections:\n  allfiles:\n    path: \"{abs}\"\n    pattern: \"**/*.md\"\n"
+        ));
+        let out = e.run_in(&dir, &["update"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("5 new"), "stdout: {}", out.stdout);
+    }
+}
+
+// ===========================================================================
+// search output formats — qmd:// URIs, context, docid
+// ===========================================================================
+//
+// qmd's "custom-index search links include ?index= and can be passed back to
+// qmd get" (cli.test.ts:1314) is dropped: rqmd does not append a `?index=`
+// query suffix to `qmd://` URIs, so there is nothing to round-trip back to
+// `get`. The `--index` selection still works; only the link annotation differs.
+mod search_output_formats {
+    use crate::common::*;
+
+    const CTX: &str = "Test fixtures for QMD";
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e.run(&["context", "add", "qmd://fixtures/", CTX])
+            .assert_ok();
+        e
+    }
+
+    #[test]
+    fn json_includes_qmd_path_docid_and_context() {
+        let e = seeded();
+        let out = e.run(&["search", "--json", "-n", "1", "test"]);
+        out.assert_ok();
+        let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("json");
+        let r = &v.as_array().expect("array")[0];
+
+        let file = r["file"].as_str().unwrap();
+        assert!(file.starts_with("qmd://fixtures/"), "file: {file}");
+        // rqmd's JSON `docid` is the bare 6-hex id (no leading '#').
+        assert!(is_hex6(r["docid"].as_str().unwrap()), "docid: {r}");
+        assert_eq!(r["context"].as_str().unwrap(), CTX);
+        assert!(!file.contains("/Users/"));
+        assert!(!file.contains("/home/"));
+    }
+
+    #[test]
+    fn files_includes_path_docid_and_context() {
+        let e = seeded();
+        let out = e.run(&["search", "--files", "-n", "1", "test"]);
+        out.assert_ok();
+        // Format: #docid,score,<bare path>,"context"
+        let line = first_line(&out.stdout);
+        let parts: Vec<&str> = line.splitn(3, ',').collect();
+        assert!(
+            parts[0].starts_with('#') && is_hex6(&parts[0][1..]),
+            "line: {line}"
+        );
+        assert!(parts[2].starts_with("fixtures/"), "line: {line}");
+        assert!(out.stdout.contains(CTX), "stdout: {}", out.stdout);
+        assert!(!out.stdout.contains("/Users/"));
+        assert!(!out.stdout.contains("/home/"));
+    }
+
+    #[test]
+    fn csv_includes_path_docid_and_context() {
+        let e = seeded();
+        let out = e.run(&["search", "--csv", "-n", "1", "test"]);
+        out.assert_ok();
+        assert!(out
+            .stdout
+            .contains("docid,score,file,title,context,line,snippet"));
+        // Data row: #docid,score,<bare path>,...
+        let row = out
+            .stdout
+            .lines()
+            .find(|l| l.starts_with('#'))
+            .expect("data row");
+        let parts: Vec<&str> = row.splitn(4, ',').collect();
+        assert!(is_hex6(&parts[0][1..]), "row: {row}");
+        assert!(parts[2].starts_with("fixtures/"), "row: {row}");
+        assert!(out.stdout.contains(CTX));
+        assert!(!out.stdout.contains("/Users/"));
+        assert!(!out.stdout.contains("/home/"));
+    }
+
+    #[test]
+    fn md_includes_docid_and_context() {
+        let e = seeded();
+        let out = e.run(&["search", "--md", "-n", "1", "test"]);
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("**docid:** `#"),
+            "stdout: {}",
+            out.stdout
+        );
+        assert!(out.stdout.contains(&format!("**context:** {CTX}")));
+    }
+
+    #[test]
+    fn xml_includes_path_docid_and_context() {
+        let e = seeded();
+        let out = e.run(&["search", "--xml", "-n", "1", "test"]);
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("<file docid=\"#"),
+            "stdout: {}",
+            out.stdout
+        );
+        assert!(out.stdout.contains("name=\"fixtures/"));
+        assert!(out.stdout.contains(&format!("context=\"{CTX}\"")));
+        assert!(!out.stdout.contains("/Users/"));
+        assert!(!out.stdout.contains("/home/"));
+    }
+
+    #[test]
+    fn default_cli_format_includes_path_and_context() {
+        let e = seeded();
+        let out = e.run(&["search", "-n", "1", "test"]);
+        out.assert_ok();
+        // rqmd's default CLI is a numbered list with a bare path + lowercase
+        // "context:" (no docid, no qmd:// prefix, no OSC-8 links).
+        assert!(out.stdout.contains("fixtures/"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains(&format!("context: {CTX}")));
+        assert!(!out.stdout.contains('\u{1b}')); // no ANSI / OSC-8
+        assert!(!out.stdout.contains("/Users/"));
+        assert!(!out.stdout.contains("/home/"));
+    }
+}
+
+// ===========================================================================
+// get command path normalization
+// ===========================================================================
+mod get_path_normalization {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn get_with_qmd_collection_path() {
+        let e = seeded();
+        let out = e.run(&["get", "qmd://fixtures/test1.md", "-l", "3"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Test Document 1"));
+    }
+
+    #[test]
+    fn get_with_collection_path_no_scheme() {
+        let e = seeded();
+        let out = e.run(&["get", "fixtures/test1.md", "-l", "3"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Test Document 1"));
+    }
+
+    #[test]
+    fn get_with_double_slash_path() {
+        let e = seeded();
+        let out = e.run(&["get", "//fixtures/test1.md", "-l", "3"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Test Document 1"));
+    }
+
+    // qmd's "qmd:////collection/path (extra slashes)" get test is dropped:
+    // rqmd's `get` resolver normalizes `qmd://` and `//` but not the
+    // 4-slash `qmd:////` form (it reports "Document not found").
+
+    #[test]
+    fn get_with_path_line_suffix() {
+        let e = seeded();
+        let out = e.run(&["get", "fixtures/test1.md:3", "-l", "2"]);
+        out.assert_ok();
+        // Starts at line 3, so the line-1 heading is not at the top.
+        assert!(!out.stdout.lines().any(|l| l == "# Test Document 1"));
+    }
+
+    #[test]
+    fn get_with_qmd_path_line_suffix() {
+        let e = seeded();
+        let out = e.run(&["get", "qmd://fixtures/test1.md:3", "-l", "2"]);
+        out.assert_ok();
+        assert!(!out.stdout.lines().any(|l| l == "# Test Document 1"));
+    }
+}
+
+// ===========================================================================
+// status & collection list hide filesystem paths
+// ===========================================================================
+mod hide_filesystem_paths {
+    use crate::common::*;
+
+    fn seeded() -> Env {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        e
+    }
+
+    #[test]
+    fn status_does_not_show_collection_filesystem_paths() {
+        let e = seeded();
+        let out = e.run(&["status"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("qmd://fixtures/"));
+        // status only ever prints the collection as a qmd:// URI; the on-disk
+        // fixtures path must not leak. (The `Index:` line legitimately shows the
+        // db path, which is the temp db, not the fixtures dir.)
+        let fwd = e.yaml_path(&e.fixtures);
+        assert!(
+            !out.stdout.contains(&fwd),
+            "leaked path: {fwd}\n{}",
+            out.stdout
+        );
+        assert!(!out.stdout.contains(e.fixtures.to_str().unwrap()));
+    }
+
+    #[test]
+    fn collection_list_does_not_show_filesystem_paths() {
+        let e = seeded();
+        let out = e.run(&["collection", "list"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("qmd://fixtures/"));
+        // `collection list` prints `Pattern:` but never a `Path:` line
+        // (only `collection show` does).
+        assert!(!out.stdout.contains("Path:"), "stdout: {}", out.stdout);
+    }
+}
