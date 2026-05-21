@@ -392,6 +392,51 @@ fn query_type_str(t: QueryType) -> &'static str {
     }
 }
 
+// ============================================================================
+// MCP CSV
+//
+// Maps to qmd `searchResultsToMcpCsv` (`formatter.ts:217–225`). Lives here
+// alongside the other search formatters (qmd keeps it in the CLI formatter
+// module too). The MCP server (rqmd-mcp) is still a stub, so this is
+// forward-looking and currently unused outside tests.
+// ============================================================================
+
+/// A pre-extracted MCP search hit (caller has already computed the snippet).
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct McpHit {
+    pub docid: String,
+    pub file: String,
+    pub title: String,
+    pub score: f64,
+    pub context: Option<String>,
+    pub snippet: String,
+}
+
+/// Format MCP search hits as the simple CSV qmd's MCP server emits.
+#[allow(dead_code)]
+pub fn mcp_results_to_csv(rows: &[McpHit]) -> String {
+    let mut out = String::from("docid,file,title,score,context,snippet");
+    for r in rows {
+        out.push('\n');
+        out.push_str(
+            &[
+                escape_csv(&format!("#{}", r.docid)),
+                escape_csv(&r.file),
+                escape_csv(&r.title),
+                // qmd passes the raw number through `String(...)`; Rust's f64
+                // Display matches typical scores but can diverge from JS number
+                // formatting at extreme magnitudes (and applies no rounding).
+                escape_csv(&r.score.to_string()),
+                escape_csv(r.context.as_deref().unwrap_or("")),
+                escape_csv(&r.snippet),
+            ]
+            .join(","),
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +641,98 @@ mod tests {
         assert_eq!(fmt_hits_files(&[]), "");
         assert_eq!(fmt_hits_md(&[], false), "");
         assert_eq!(fmt_hits_xml(&[], false), "");
+    }
+
+    // ========================================================================
+    // qmd formatter.test.ts parity: search JSON / dispatch / MCP CSV
+    // ========================================================================
+
+    const TEST_CONTEXT: &str = "Internal engineering keynotes from company summit events";
+
+    fn ctx_hits() -> Vec<Hit> {
+        vec![hit(
+            "dc5590",
+            "qmd://archive/summit/keynote.md",
+            "Summit Keynote",
+            Some(TEST_CONTEXT),
+            0.84,
+            3,
+            "This is the keynote content.",
+            None,
+        )]
+    }
+
+    // ---- search JSON: context present / line (qmd A1/A2/A3) ----
+
+    #[test]
+    fn json_includes_context() {
+        let v = serde_json::to_value(ctx_hits()).unwrap();
+        assert_eq!(v[0]["context"], TEST_CONTEXT);
+    }
+
+    #[test]
+    fn json_omits_context_when_none() {
+        let hits = vec![hit("a", "x.md", "T", None, 0.5, 1, "s", None)];
+        let v = serde_json::to_value(hits).unwrap();
+        assert!(v[0].get("context").is_none());
+    }
+
+    #[test]
+    fn json_includes_line() {
+        let v = serde_json::to_value(ctx_hits()).unwrap();
+        assert!(v[0]["line"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn json_includes_line_with_full() {
+        let hits = vec![hit("a", "x.md", "T", None, 0.5, 5, "snip", Some("L1\nL2"))];
+        let v = serde_json::to_value(hits).unwrap();
+        assert!(v[0]["line"].as_u64().unwrap() > 0);
+    }
+
+    // ---- formatSearchResults dispatch targets (qmd A9–A13) ----
+
+    #[test]
+    fn format_search_results_json_includes_context() {
+        assert!(serde_json::to_string(&ctx_hits())
+            .unwrap()
+            .contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_search_results_csv_includes_context() {
+        assert!(fmt_hits_csv(&ctx_hits(), false).contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_search_results_files_includes_context() {
+        assert!(fmt_hits_files(&ctx_hits()).contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_search_results_md_includes_context() {
+        assert!(fmt_hits_md(&ctx_hits(), false).contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_search_results_xml_includes_context() {
+        assert!(fmt_hits_xml(&ctx_hits(), false).contains(TEST_CONTEXT));
+    }
+
+    // ---- MCP CSV (qmd A8) ----
+
+    #[test]
+    fn mcp_csv_includes_context() {
+        let rows = vec![McpHit {
+            docid: "dc5590".to_string(),
+            file: "qmd://archive/summit/keynote.md".to_string(),
+            title: "Summit Keynote".to_string(),
+            score: 0.84,
+            context: Some(TEST_CONTEXT.to_string()),
+            snippet: "This is the keynote content.".to_string(),
+        }];
+        let out = mcp_results_to_csv(&rows);
+        assert!(out.lines().next().unwrap().contains("context"));
+        assert!(out.contains(TEST_CONTEXT));
     }
 }

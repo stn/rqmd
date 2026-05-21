@@ -1,7 +1,12 @@
 //! Output formatting for `get` and `multi-get`.
 //!
 //! Maps to qmd's `src/cli/formatter.ts` (the CLI/JSON/CSV/MD/XML/files
-//! branches in `multiGet`, `qmd.ts:1262–1336`).
+//! branches in `multiGet`, `qmd.ts:1262–1336`, plus the single-document
+//! formatters `documentTo*` / `formatDocument`, `formatter.ts:314–376`).
+//!
+//! Each `fmt_*` returns the complete stdout text (including trailing
+//! newlines) and the thin `write_*` wrappers just `print!` it — this keeps a
+//! single source of truth that is unit-testable.
 
 use rqmd_core::store::search::{DocumentResult, MultiGetResult};
 use serde_json::{json, Value};
@@ -68,15 +73,29 @@ pub fn truncate_lines(body: &str, max_lines: Option<usize>) -> String {
     format!("{kept}\n\n[... truncated {extra} more lines]")
 }
 
+// ============================================================================
+// multi-get formatters
+// ============================================================================
+
 /// Write `multi-get` results in the requested format.
 pub fn write_multi_get(results: &[MultiGetResult], max_lines: Option<usize>, format: OutputFormat) {
+    print!("{}", fmt_multi_get(results, max_lines, format));
+}
+
+/// Format `multi-get` results to a string (dispatcher over the per-format
+/// `fmt_*` helpers).
+pub fn fmt_multi_get(
+    results: &[MultiGetResult],
+    max_lines: Option<usize>,
+    format: OutputFormat,
+) -> String {
     match format {
-        OutputFormat::Json => write_json(results, max_lines),
-        OutputFormat::Csv => write_csv(results, max_lines),
-        OutputFormat::Files => write_files(results),
-        OutputFormat::Md => write_md(results, max_lines),
-        OutputFormat::Xml => write_xml(results, max_lines),
-        OutputFormat::Cli => write_cli(results, max_lines),
+        OutputFormat::Json => fmt_json(results, max_lines),
+        OutputFormat::Csv => fmt_csv(results, max_lines),
+        OutputFormat::Files => fmt_files(results),
+        OutputFormat::Md => fmt_md(results, max_lines),
+        OutputFormat::Xml => fmt_xml(results, max_lines),
+        OutputFormat::Cli => fmt_cli(results, max_lines),
     }
 }
 
@@ -91,7 +110,14 @@ fn title_of(doc: &DocumentResult) -> String {
     }
 }
 
-fn write_json(results: &[MultiGetResult], max_lines: Option<usize>) {
+fn skipped_title(display_path: &str) -> String {
+    display_path
+        .rsplit_once('/')
+        .map(|(_, l)| l.to_string())
+        .unwrap_or_else(|| display_path.to_string())
+}
+
+fn fmt_json(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
     let arr: Vec<Value> = results
         .iter()
         .map(|r| match r {
@@ -106,20 +132,24 @@ fn write_json(results: &[MultiGetResult], max_lines: Option<usize>) {
                 }
                 obj
             }
-            MultiGetResult::Skipped { filepath: _, display_path, skip_reason } => json!({
+            MultiGetResult::Skipped {
+                filepath: _,
+                display_path,
+                skip_reason,
+            } => json!({
                 "file": display_path,
-                "title": display_path.rsplit_once('/').map(|(_, l)| l.to_string()).unwrap_or_else(|| display_path.clone()),
+                "title": skipped_title(display_path),
                 "skipped": true,
                 "reason": skip_reason,
             }),
         })
         .collect();
     let s = serde_json::to_string_pretty(&arr).unwrap_or_else(|_| "[]".to_string());
-    println!("{s}");
+    format!("{s}\n")
 }
 
-fn write_csv(results: &[MultiGetResult], max_lines: Option<usize>) {
-    println!("file,title,context,skipped,body");
+fn fmt_csv(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
+    let mut out = String::from("file,title,context,skipped,body\n");
     for r in results {
         let row = match r {
             MultiGetResult::Found(doc) => [
@@ -138,131 +168,384 @@ fn write_csv(results: &[MultiGetResult], max_lines: Option<usize>) {
                 ..
             } => [
                 escape_csv(display_path),
-                escape_csv(
-                    &display_path
-                        .rsplit_once('/')
-                        .map(|(_, l)| l.to_string())
-                        .unwrap_or_else(|| display_path.clone()),
-                ),
+                escape_csv(&skipped_title(display_path)),
                 String::new(),
                 "true".to_string(),
                 escape_csv(skip_reason),
             ],
         };
-        println!("{}", row.join(","));
+        out.push_str(&row.join(","));
+        out.push('\n');
     }
+    out
 }
 
-fn write_files(results: &[MultiGetResult]) {
+fn fmt_files(results: &[MultiGetResult]) -> String {
+    let mut out = String::new();
     for r in results {
         match r {
             MultiGetResult::Found(doc) => {
                 if let Some(ctx) = &doc.context {
                     let esc = ctx.replace('"', "\"\"");
-                    println!("{},\"{esc}\"", doc.display_path);
+                    out.push_str(&format!("{},\"{esc}\"\n", doc.display_path));
                 } else {
-                    println!("{}", doc.display_path);
+                    out.push_str(&format!("{}\n", doc.display_path));
                 }
             }
             MultiGetResult::Skipped { display_path, .. } => {
-                println!("{display_path},[SKIPPED]");
+                out.push_str(&format!("{display_path},[SKIPPED]\n"));
             }
         }
     }
+    out
 }
 
-fn write_md(results: &[MultiGetResult], max_lines: Option<usize>) {
+fn fmt_md(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
+    let mut out = String::new();
     for r in results {
         match r {
             MultiGetResult::Found(doc) => {
-                println!("## {}\n", doc.display_path);
+                out.push_str(&format!("## {}\n\n", doc.display_path));
                 let title = title_of(doc);
                 if title != doc.display_path {
-                    println!("**Title:** {title}\n");
+                    out.push_str(&format!("**Title:** {title}\n\n"));
                 }
                 if let Some(ctx) = &doc.context {
-                    println!("**Context:** {ctx}\n");
+                    out.push_str(&format!("**Context:** {ctx}\n\n"));
                 }
-                println!("```");
-                println!(
-                    "{}",
+                out.push_str("```\n");
+                out.push_str(&format!(
+                    "{}\n",
                     truncate_lines(doc.body.as_deref().unwrap_or(""), max_lines)
-                );
-                println!("```\n");
+                ));
+                out.push_str("```\n\n");
             }
             MultiGetResult::Skipped {
                 display_path,
                 skip_reason,
                 ..
             } => {
-                println!("## {display_path}\n");
-                println!("> {skip_reason}\n");
+                out.push_str(&format!("## {display_path}\n\n"));
+                out.push_str(&format!("> {skip_reason}\n\n"));
             }
         }
     }
+    out
 }
 
-fn write_xml(results: &[MultiGetResult], max_lines: Option<usize>) {
-    println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-    println!("<documents>");
+fn fmt_xml(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<documents>\n");
     for r in results {
-        println!("  <document>");
+        out.push_str("  <document>\n");
         match r {
             MultiGetResult::Found(doc) => {
-                println!("    <file>{}</file>", escape_xml(&doc.display_path));
-                println!("    <title>{}</title>", escape_xml(&title_of(doc)));
+                out.push_str(&format!(
+                    "    <file>{}</file>\n",
+                    escape_xml(&doc.display_path)
+                ));
+                out.push_str(&format!(
+                    "    <title>{}</title>\n",
+                    escape_xml(&title_of(doc))
+                ));
                 if let Some(ctx) = &doc.context {
-                    println!("    <context>{}</context>", escape_xml(ctx));
+                    out.push_str(&format!("    <context>{}</context>\n", escape_xml(ctx)));
                 }
-                println!(
-                    "    <body>{}</body>",
+                out.push_str(&format!(
+                    "    <body>{}</body>\n",
                     escape_xml(&truncate_lines(
                         doc.body.as_deref().unwrap_or(""),
                         max_lines
                     ))
-                );
+                ));
             }
             MultiGetResult::Skipped {
                 display_path,
                 skip_reason,
                 ..
             } => {
-                println!("    <file>{}</file>", escape_xml(display_path));
-                println!("    <skipped>true</skipped>");
-                println!("    <reason>{}</reason>", escape_xml(skip_reason));
+                out.push_str(&format!("    <file>{}</file>\n", escape_xml(display_path)));
+                out.push_str("    <skipped>true</skipped>\n");
+                out.push_str(&format!(
+                    "    <reason>{}</reason>\n",
+                    escape_xml(skip_reason)
+                ));
             }
         }
-        println!("  </document>");
+        out.push_str("  </document>\n");
     }
-    println!("</documents>");
+    out.push_str("</documents>\n");
+    out
 }
 
-fn write_cli(results: &[MultiGetResult], max_lines: Option<usize>) {
+fn fmt_cli(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
+    let bar = "=".repeat(60);
+    let mut out = String::new();
     for r in results {
-        let bar = "=".repeat(60);
         match r {
             MultiGetResult::Found(doc) => {
-                println!("\n{bar}");
-                println!("File: {}", doc.display_path);
-                println!("{bar}\n");
+                out.push_str(&format!("\n{bar}\n"));
+                out.push_str(&format!("File: {}\n", doc.display_path));
+                out.push_str(&format!("{bar}\n\n"));
                 if let Some(ctx) = &doc.context {
-                    println!("Folder Context: {ctx}\n---\n");
+                    out.push_str(&format!("Folder Context: {ctx}\n---\n\n"));
                 }
-                println!(
-                    "{}",
+                out.push_str(&format!(
+                    "{}\n",
                     truncate_lines(doc.body.as_deref().unwrap_or(""), max_lines)
-                );
+                ));
             }
             MultiGetResult::Skipped {
                 display_path,
                 skip_reason,
                 ..
             } => {
-                println!("\n{bar}");
-                println!("File: {display_path}");
-                println!("{bar}\n");
-                println!("[SKIPPED: {skip_reason}]");
+                out.push_str(&format!("\n{bar}\n"));
+                out.push_str(&format!("File: {display_path}\n"));
+                out.push_str(&format!("{bar}\n\n"));
+                out.push_str(&format!("[SKIPPED: {skip_reason}]\n"));
             }
         }
+    }
+    out
+}
+
+// ============================================================================
+// single-document formatters
+//
+// Maps to qmd `documentToJson` / `documentToMarkdown` / `documentToXml` /
+// `formatDocument` (`formatter.ts:314–376`). JSON keys and XML element names
+// follow qmd's camelCase (`modifiedAt`, `bodyLength`).
+//
+// As in qmd (where `formatDocument` has no production caller — only tests),
+// these are unwired: `rqmd get` mirrors qmd's plain CLI output and exposes no
+// format flags. Kept + tested for parity; `#[allow(dead_code)]` until a caller
+// (e.g. a future structured `get`) needs them.
+// ============================================================================
+
+#[allow(dead_code)]
+pub fn document_to_json(doc: &DocumentResult) -> String {
+    let mut obj = json!({
+        "file": doc.display_path,
+        "title": doc.title,
+        "hash": doc.hash,
+        "modifiedAt": doc.modified_at,
+        "bodyLength": doc.body_length,
+    });
+    if let Some(ctx) = &doc.context {
+        obj["context"] = json!(ctx);
+    }
+    if let Some(body) = &doc.body {
+        obj["body"] = json!(body);
+    }
+    serde_json::to_string_pretty(&obj).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[allow(dead_code)]
+pub fn document_to_md(doc: &DocumentResult) -> String {
+    let heading = if doc.title.is_empty() {
+        doc.display_path.as_str()
+    } else {
+        doc.title.as_str()
+    };
+    let mut md = format!("# {heading}\n\n");
+    if let Some(ctx) = &doc.context {
+        md.push_str(&format!("**Context:** {ctx}\n\n"));
+    }
+    md.push_str(&format!("**File:** {}\n", doc.display_path));
+    md.push_str(&format!("**Modified:** {}\n\n", doc.modified_at));
+    if let Some(body) = &doc.body {
+        md.push_str(&format!("---\n\n{body}\n"));
+    }
+    md
+}
+
+#[allow(dead_code)]
+pub fn document_to_xml(doc: &DocumentResult) -> String {
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<document>\n");
+    xml.push_str(&format!(
+        "  <file>{}</file>\n",
+        escape_xml(&doc.display_path)
+    ));
+    xml.push_str(&format!("  <title>{}</title>\n", escape_xml(&doc.title)));
+    if let Some(ctx) = &doc.context {
+        xml.push_str(&format!("  <context>{}</context>\n", escape_xml(ctx)));
+    }
+    xml.push_str(&format!("  <hash>{}</hash>\n", escape_xml(&doc.hash)));
+    xml.push_str(&format!(
+        "  <modifiedAt>{}</modifiedAt>\n",
+        escape_xml(&doc.modified_at)
+    ));
+    xml.push_str(&format!("  <bodyLength>{}</bodyLength>\n", doc.body_length));
+    if let Some(body) = &doc.body {
+        xml.push_str(&format!("  <body>{}</body>\n", escape_xml(body)));
+    }
+    xml.push_str("</document>");
+    xml
+}
+
+/// Format a single document to the requested format. `json`/`md`/`xml` are
+/// handled; everything else falls back to markdown (qmd `formatDocument`
+/// default, `formatter.ts:364–376`).
+#[allow(dead_code)]
+pub fn format_document(doc: &DocumentResult, format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Json => document_to_json(doc),
+        OutputFormat::Xml => document_to_xml(doc),
+        _ => document_to_md(doc),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_CONTEXT: &str = "Internal engineering keynotes from company summit events";
+
+    fn make_doc(context: Option<&str>) -> DocumentResult {
+        DocumentResult {
+            filepath: "qmd://archive/summit/keynote.md".to_string(),
+            display_path: "qmd://archive/summit/keynote.md".to_string(),
+            title: "Summit Keynote".to_string(),
+            context: context.map(String::from),
+            hash: "dc5590abcdef".to_string(),
+            docid: "dc5590".to_string(),
+            collection_name: "archive".to_string(),
+            modified_at: "2024-01-01T00:00:00Z".to_string(),
+            body_length: 100,
+            body: Some(
+                "---\ntitle: Summit Keynote\n---\n\nThis is the keynote content.".to_string(),
+            ),
+        }
+    }
+
+    fn make_found(context: Option<&str>) -> MultiGetResult {
+        MultiGetResult::Found(make_doc(context))
+    }
+
+    // ---- multi-get: context in every format (qmd group C) ----
+
+    #[test]
+    fn multi_get_json_includes_context() {
+        let out = fmt_json(&[make_found(Some(TEST_CONTEXT))], None);
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed[0]["context"], TEST_CONTEXT);
+    }
+
+    #[test]
+    fn multi_get_csv_includes_context() {
+        let out = fmt_csv(&[make_found(Some(TEST_CONTEXT))], None);
+        assert!(out.lines().next().unwrap().contains("context"));
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn multi_get_files_includes_context() {
+        let out = fmt_files(&[make_found(Some(TEST_CONTEXT))]);
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn multi_get_md_includes_context() {
+        let out = fmt_md(&[make_found(Some(TEST_CONTEXT))], None);
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn multi_get_xml_includes_context() {
+        let out = fmt_xml(&[make_found(Some(TEST_CONTEXT))], None);
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_documents_json_includes_context() {
+        let out = fmt_multi_get(&[make_found(Some(TEST_CONTEXT))], None, OutputFormat::Json);
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed[0]["context"], TEST_CONTEXT);
+    }
+
+    #[test]
+    fn format_documents_md_includes_context() {
+        let out = fmt_multi_get(&[make_found(Some(TEST_CONTEXT))], None, OutputFormat::Md);
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_documents_xml_includes_context() {
+        let out = fmt_multi_get(&[make_found(Some(TEST_CONTEXT))], None, OutputFormat::Xml);
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    // ---- single document: context in every format (qmd group D) ----
+
+    #[test]
+    fn single_doc_json_includes_context() {
+        let out = document_to_json(&make_doc(Some(TEST_CONTEXT)));
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["context"], TEST_CONTEXT);
+    }
+
+    #[test]
+    fn single_doc_md_includes_context() {
+        assert!(document_to_md(&make_doc(Some(TEST_CONTEXT))).contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn single_doc_xml_includes_context() {
+        assert!(document_to_xml(&make_doc(Some(TEST_CONTEXT))).contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_document_json_includes_context() {
+        let out = format_document(&make_doc(Some(TEST_CONTEXT)), OutputFormat::Json);
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["context"], TEST_CONTEXT);
+    }
+
+    #[test]
+    fn format_document_md_includes_context() {
+        let out = format_document(&make_doc(Some(TEST_CONTEXT)), OutputFormat::Md);
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    #[test]
+    fn format_document_xml_includes_context() {
+        let out = format_document(&make_doc(Some(TEST_CONTEXT)), OutputFormat::Xml);
+        assert!(out.contains(TEST_CONTEXT));
+    }
+
+    // ---- single document: context omitted when null (qmd group E) ----
+
+    #[test]
+    fn single_doc_json_omits_context_when_none() {
+        let out = document_to_json(&make_doc(None));
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.get("context").is_none());
+    }
+
+    #[test]
+    fn single_doc_md_omits_context_line_when_none() {
+        assert!(!document_to_md(&make_doc(None)).contains("Context:"));
+    }
+
+    #[test]
+    fn single_doc_xml_omits_context_element_when_none() {
+        assert!(!document_to_xml(&make_doc(None)).contains("<context>"));
+    }
+
+    // ---- hardening beyond qmd: camelCase keys + heading fallback ----
+
+    #[test]
+    fn single_doc_json_uses_camel_case_keys() {
+        let out = document_to_json(&make_doc(Some(TEST_CONTEXT)));
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.get("modifiedAt").is_some());
+        assert!(parsed.get("bodyLength").is_some());
+    }
+
+    #[test]
+    fn single_doc_md_heading_falls_back_to_display_path_when_title_empty() {
+        let mut doc = make_doc(Some(TEST_CONTEXT));
+        doc.title = String::new();
+        assert!(document_to_md(&doc).starts_with("# qmd://archive/summit/keynote.md\n"));
     }
 }
