@@ -105,7 +105,9 @@ pub async fn hybrid_query(
     let candidate_limit = options.candidate_limit.unwrap_or(RERANK_CANDIDATE_LIMIT);
     let collection = options.collection.as_deref();
     let explain = options.explain;
-    let intent = options.intent.as_deref();
+    // Normalize empty intent to `None` (qmd treats "" as falsy via `intent ?`
+    // / `!intent`); keeps it out of `expand_query`'s cache key too.
+    let intent = options.intent.as_deref().filter(|i| !i.is_empty());
     let skip_rerank = options.skip_rerank;
     let hooks = &options.hooks;
     let chunk_strategy = options.chunk_strategy.unwrap_or(ChunkStrategy::Auto);

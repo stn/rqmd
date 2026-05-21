@@ -7,7 +7,9 @@ mod common;
 use std::sync::Arc;
 
 use rqmd_core::db::rusqlite::params;
+use rqmd_core::store::documents::{hash_content, insert_content, insert_document};
 use rqmd_core::store::embeddings::{ensure_vec_table, insert_embedding};
+use rqmd_core::store::path::now_rfc3339;
 use rqmd_core::store::Store;
 use rqmd_core::store_ops::{
     hybrid_query, structured_search, vector_search_query, ExpandedQuery, ExpandedQueryType,
@@ -128,6 +130,96 @@ async fn hybrid_query_intent_disables_strong_signal_path() {
     assert!(
         mock.expand_calls.load(std::sync::atomic::Ordering::Relaxed) >= 1,
         "intent should disable strong-signal bypass — expand must run"
+    );
+}
+
+/// Build an FTS corpus where one doc dominates "zephyr" strongly enough to
+/// clear the strong-signal thresholds (mirrors `store_search_fts.rs`'s
+/// `search_fts_strong_signal_detection`). No vector table → FTS-only, which is
+/// all the strong-signal probe reads.
+fn open_strong_signal_store() -> (NamedTempFile, Store) {
+    fn insert(store: &Store, path: &str, title: &str, body: &str) {
+        let now = now_rfc3339();
+        let hash = hash_content(body);
+        store
+            .with_connection(|c| insert_content(c, &hash, body, &now))
+            .unwrap();
+        store
+            .with_connection(|c| insert_document(c, "docs", path, title, &hash, &now, &now))
+            .unwrap();
+    }
+    let tmp = NamedTempFile::new().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+    // 50 noise docs give enough IDF for the dominant score to exceed 0.85.
+    for i in 0..50 {
+        insert(
+            &store,
+            &format!("noise{i}.md"),
+            &format!("Unrelated Topic {i}"),
+            &format!("This document discusses gardening and cooking {i}"),
+        );
+    }
+    // Dominant: keyword in path + title + body.
+    insert(
+        &store,
+        "zephyr/zephyr-guide.md",
+        "Zephyr Configuration Guide",
+        "Complete zephyr configuration guide. Zephyr setup instructions for zephyr deployment.",
+    );
+    // Weak: keyword once in a long body.
+    insert(
+        &store,
+        "notes/misc.md",
+        "General Notes",
+        "Various topics covering many areas of technology and design. One of them might relate to \
+         zephyr but mostly about other things entirely. Additional content about databases, \
+         networking, security, performance, monitoring, deployment, testing, and documentation.",
+    );
+    (tmp, store)
+}
+
+/// Run `hybrid_query` for "zephyr" with the given intent on a fresh
+/// strong-signal store and report how many times `expand_query` ran.
+async fn strong_signal_expand_calls(intent: Option<&str>) -> usize {
+    let (_t, store) = open_strong_signal_store();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+    let _ = hybrid_query(
+        &store,
+        llm,
+        "zephyr",
+        HybridQueryOptions {
+            limit: Some(3),
+            skip_rerank: true,
+            intent: intent.map(str::to_string),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    mock.expand_calls.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tokio::test]
+async fn hybrid_query_empty_intent_behaves_like_no_intent() {
+    // An empty intent is normalized to `None` (qmd treats "" as falsy), so it
+    // must NOT disable the strong-signal bypass. The fixture yields a real
+    // strong signal, making the bypass observable: `None`/`""` skip expansion
+    // (expand_calls == 0); a real intent forces it (>= 1). This test fails if
+    // the `.filter()` normalization is dropped from `hybrid_query`.
+    assert_eq!(
+        strong_signal_expand_calls(None).await,
+        0,
+        "no intent + strong signal should bypass expansion"
+    );
+    assert_eq!(
+        strong_signal_expand_calls(Some("")).await,
+        0,
+        "empty intent must behave like no intent — bypass stays active"
+    );
+    assert!(
+        strong_signal_expand_calls(Some("web performance latency")).await >= 1,
+        "a real intent must disable the strong-signal bypass"
     );
 }
 

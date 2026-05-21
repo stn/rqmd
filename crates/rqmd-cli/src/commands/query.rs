@@ -39,10 +39,10 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
     let parsed = parse_structured_query(&q)?;
     // The `--intent` flag wins over a parsed `intent:` line
     // (TS: `opts.intent || parsed?.intent`, qmd.ts:2507).
-    let intent = args
-        .intent
-        .clone()
-        .or_else(|| parsed.as_ref().and_then(|pq| pq.intent.clone()));
+    let intent = resolve_query_intent(
+        args.intent.as_deref(),
+        parsed.as_ref().and_then(|pq| pq.intent.as_deref()),
+    );
 
     let limit = Some(if args.flags.all {
         500
@@ -183,6 +183,13 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
 struct ParsedStructuredQuery {
     searches: Vec<ExpandedQuery>,
     intent: Option<String>,
+}
+
+/// Resolve the effective intent, mirroring qmd's `opts.intent || parsed?.intent`
+/// (`qmd.ts:2507`). An empty `--intent` is falsy in JS, so it falls through to
+/// the parsed `intent:` line; whitespace-only is kept (qmd preserves it too).
+fn resolve_query_intent(flag: Option<&str>, parsed: Option<&str>) -> Option<String> {
+    flag.filter(|s| !s.is_empty()).or(parsed).map(str::to_string)
 }
 
 /// Port of `parseStructuredQuery` (`qmd.ts:2322-2390`). Returns `None` for a
@@ -407,6 +414,59 @@ mod tests {
 
     fn parse(q: &str) -> Result<Option<ParsedStructuredQuery>> {
         parse_structured_query(q)
+    }
+
+    // --- resolve_query_intent: mirrors qmd `opts.intent || parsed?.intent` ---
+
+    #[test]
+    fn intent_empty_flag_falls_through_to_parsed() {
+        assert_eq!(
+            resolve_query_intent(Some(""), Some("parsed")),
+            Some("parsed".to_string())
+        );
+    }
+
+    #[test]
+    fn intent_empty_flag_and_no_parsed_is_none() {
+        assert_eq!(resolve_query_intent(Some(""), None), None);
+    }
+
+    #[test]
+    fn intent_flag_wins_over_parsed() {
+        assert_eq!(
+            resolve_query_intent(Some("flag"), Some("parsed")),
+            Some("flag".to_string())
+        );
+    }
+
+    #[test]
+    fn intent_whitespace_flag_is_kept() {
+        // qmd `||` only collapses the empty string; "  " is truthy and preserved.
+        assert_eq!(
+            resolve_query_intent(Some("  "), Some("parsed")),
+            Some("  ".to_string())
+        );
+    }
+
+    #[test]
+    fn intent_no_flag_uses_parsed() {
+        assert_eq!(
+            resolve_query_intent(None, Some("parsed")),
+            Some("parsed".to_string())
+        );
+    }
+
+    #[test]
+    fn intent_no_flag_no_parsed_is_none() {
+        assert_eq!(resolve_query_intent(None, None), None);
+    }
+
+    #[test]
+    fn intent_flag_only_is_kept() {
+        assert_eq!(
+            resolve_query_intent(Some("flag"), None),
+            Some("flag".to_string())
+        );
     }
 
     #[test]

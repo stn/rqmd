@@ -54,7 +54,8 @@ pub async fn vector_search_query(
     let limit = options.limit.unwrap_or(10);
     let min_score = options.min_score.unwrap_or(0.3);
     let collection = options.collection.as_deref();
-    let intent = options.intent.as_deref();
+    // Normalize empty intent to `None` (qmd treats "" as falsy via `intent ?`).
+    let intent = options.intent.as_deref().filter(|i| !i.is_empty());
 
     if !has_vector_index(store)? {
         return Ok(Vec::new());

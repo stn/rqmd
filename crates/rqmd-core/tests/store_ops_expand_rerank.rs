@@ -53,6 +53,41 @@ async fn expand_query_calls_llm_then_caches() {
 }
 
 #[tokio::test]
+async fn expand_query_empty_intent_shares_cache_with_none() {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    let (_t, store) = open_store();
+    let mock = Arc::new(MockLlm::new(4));
+    let llm: Arc<dyn Llm> = mock.clone();
+
+    // No intent populates the cache (synthetic [hyde, vec] is non-empty).
+    let _ = expand_query(&store, llm.clone(), "q", "m", None).await.unwrap();
+    assert_eq!(mock.expand_calls.load(Relaxed), 1);
+
+    // Empty intent normalizes to `None` → same cache key → cache hit, no new
+    // LLM call. Fails if `expand_query`'s empty-intent normalization is dropped
+    // (the `"intent":""` key would miss and re-expand).
+    let _ = expand_query(&store, llm.clone(), "q", "m", Some(""))
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.expand_calls.load(Relaxed),
+        1,
+        "empty intent must reuse the no-intent cache entry"
+    );
+
+    // Sanity: a real intent is a distinct cache key → a fresh expansion.
+    let _ = expand_query(&store, llm.clone(), "q", "m", Some("real domain"))
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.expand_calls.load(Relaxed),
+        2,
+        "a non-empty intent is a distinct cache key"
+    );
+}
+
+#[tokio::test]
 async fn expand_query_filters_duplicates_of_original() {
     let (_t, store) = open_store();
     let mock = Arc::new(MockLlm::new(4));

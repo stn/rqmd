@@ -79,6 +79,11 @@ pub async fn expand_query(
     model: &str,
     intent: Option<&str>,
 ) -> Result<Vec<ExpandedQuery>> {
+    // Normalize empty intent to `None` so it shares the no-intent cache key and
+    // omits the `Query intent:` prompt line — mirrors qmd's falsy `""` handling
+    // (`intent ?` / `intent &&`). This is the single point that also covers SDK
+    // callers of this public fn (e.g. `RqmdStore::expand_query`).
+    let intent = intent.filter(|i| !i.is_empty());
     let cache_key = expand_query_cache_key(query, model, intent);
 
     // Cache lookup. Two formats accepted; one written.
