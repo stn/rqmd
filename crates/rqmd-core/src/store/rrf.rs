@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn rrf_uses_k_parameter() {
         let list = vec![ranked("doc1", 0.9)];
-        let fused60 = reciprocal_rank_fusion(&[list.clone()], &[], Some(60));
+        let fused60 = reciprocal_rank_fusion(std::slice::from_ref(&list), &[], Some(60));
         let fused30 = reciprocal_rank_fusion(&[list], &[], Some(30));
         // Lower k → higher score for top ranks.
         assert!(fused30[0].score > fused60[0].score);
