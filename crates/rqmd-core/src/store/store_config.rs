@@ -270,6 +270,23 @@ pub fn remove_store_context(
 /// Mirrors `syncConfigToDb` (`store.ts:…`). Removes rows for collections that
 /// no longer exist in the config.
 pub fn sync_config_to_db(conn: &Connection, config: &Config) -> Result<()> {
+    // Skip the sync when the config is byte-identical to what was last written.
+    // Mirrors qmd `syncConfigToDb` (`store.ts:1101-1133`): the early return
+    // protects DB-only mutations across a re-open with an unchanged config and
+    // avoids running the delete-not-in-config pass needlessly.
+    let config_json = serde_json::to_string(config.data()).unwrap_or_default();
+    let hash = crate::store::documents::hash_content(&config_json);
+    let existing_hash: Option<String> = conn
+        .query_row(
+            "SELECT value FROM store_config WHERE key = 'config_hash'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if existing_hash.as_deref() == Some(hash.as_str()) {
+        return Ok(());
+    }
+
     set_store_global_context(conn, config.data().global_context.as_deref())?;
 
     let mut keep: Vec<String> = Vec::new();
@@ -288,6 +305,11 @@ pub fn sync_config_to_db(conn: &Connection, config: &Config) -> Result<()> {
             keep.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         stmt.execute(params.as_slice())?;
     }
+
+    conn.execute(
+        "INSERT OR REPLACE INTO store_config(key, value) VALUES ('config_hash', ?)",
+        params![hash],
+    )?;
 
     Ok(())
 }

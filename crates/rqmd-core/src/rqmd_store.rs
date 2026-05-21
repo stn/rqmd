@@ -56,7 +56,8 @@ use crate::store::status::{IndexHealthInfo, IndexStatus};
 use crate::store::store_config::{
     delete_store_collection, get_store_collection, get_store_collections,
     get_store_contexts, get_store_global_context, remove_store_context, rename_store_collection,
-    set_store_global_context, update_store_context, upsert_store_collection, StoreContextEntry,
+    set_store_global_context, sync_config_to_db, update_store_context, upsert_store_collection,
+    StoreContextEntry,
 };
 use crate::store::Store;
 use crate::store::DEFAULT_MULTI_GET_MAX_BYTES;
@@ -218,12 +219,22 @@ impl RqmdStore {
                 "provide either config_path or config, not both".into(),
             ));
         }
-        let inner = Store::open(&opts.db_path)?;
+        let mut inner = Store::open(&opts.db_path)?;
         let config = if let Some(p) = opts.config_path {
             Some(Config::from_file(p)?)
         } else {
             opts.config.map(Config::inline)
         };
+
+        // Sync the in-memory config into SQLite so collections / contexts /
+        // global_context defined in YAML or inline config are visible to
+        // `list_collections`, `update`, `add_context`, etc. immediately after
+        // open. Mirrors qmd `createStore` (`index.ts:362,367`) and the CLI
+        // (`rqmd-cli state.rs`). DB-only mode (no config) skips this and keeps
+        // whatever is already in `store_collections`.
+        if let Some(cfg) = config.as_ref() {
+            inner.with_connection_mut(|c| sync_config_to_db(c, cfg))?;
+        }
 
         let model_cfg = config_models(config.as_ref());
         let llm_config = LlamaCppConfig {
@@ -503,8 +514,21 @@ impl RqmdStore {
         Ok(removed)
     }
 
-    /// Rename a collection. Returns `false` when `old` did not exist.
+    /// Rename a collection. Returns `false` when `old` did not exist, and
+    /// errors with [`crate::collections::Error::DuplicateCollection`] when the
+    /// target name is already taken (matches qmd `renameCollection`, which
+    /// throws "already exists").
     pub fn rename_collection(&mut self, old: &str, new: &str) -> Result<bool> {
+        // Guard the target up-front so callers get a typed, clear error instead
+        // of a raw SQLite PRIMARY KEY constraint failure from the UPDATE.
+        let target_exists = self
+            .inner
+            .with_connection(|c| get_store_collection(c, new).map(|o| o.is_some()))?;
+        if target_exists {
+            return Err(Error::Collections(
+                crate::collections::Error::DuplicateCollection(new.to_string()),
+            ));
+        }
         let renamed = self
             .inner
             .with_connection_mut(|conn| rename_store_collection(conn, old, new))?;
