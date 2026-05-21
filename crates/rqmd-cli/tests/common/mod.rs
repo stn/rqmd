@@ -245,6 +245,33 @@ fn spawn(cwd: &Path, db: &Path, cfg: &Path, args: &[&str], extra: &[(&str, &str)
     }
 }
 
+/// Spawn `rqmd` against a named-index *cache directory* instead of a single
+/// pinned `RQMD_INDEX_PATH`, so `--index <name>` resolves to
+/// `<cache>/<name>.sqlite` (and a link's `?index=<name>` does the same). This
+/// mirrors qmd's custom-index test env (`XDG_CACHE_HOME` set, `INDEX_PATH`
+/// empty). `--index` is NOT prepended — pass it explicitly, or omit it (e.g.
+/// for the `get` round-trip that relies on the link's `?index=`). The same
+/// `cache` dir must be reused across calls so each index DB persists.
+pub fn spawn_cache(cwd: &Path, cache: &Path, cfg: &Path, args: &[&str]) -> Out {
+    let mut cmd = Command::cargo_bin("rqmd").expect("rqmd binary is built by cargo test");
+    cmd.current_dir(cwd)
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("RQMD_INDEX_PATH")
+        .env("NO_COLOR", "1")
+        .env("CI", "1")
+        .env("PWD", cwd)
+        .env("RQMD_CACHE_DIR", cache)
+        .env("RQMD_CONFIG_DIR", cfg)
+        .args(args);
+    let out = cmd.output().expect("spawn rqmd");
+    Out {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: out.status.code().unwrap_or(-1),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Assertion helpers
 // ---------------------------------------------------------------------------

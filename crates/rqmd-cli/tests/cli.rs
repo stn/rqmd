@@ -176,8 +176,8 @@ mod cli_search {
         let e = seeded();
         let out = e.run(&["search", "xyznonexistent123"]);
         out.assert_ok();
-        // rqmd prints "No results." to stderr (qmd put it on stdout).
-        assert!(out.stderr.contains("No results"), "stderr: {}", out.stderr);
+        // qmd parity: the cli "No results found." message goes to stdout.
+        assert!(out.stdout.contains("No results"), "stdout: {}", out.stdout);
     }
 
     #[test]
@@ -231,7 +231,8 @@ mod cli_search {
         // Scores are normalised 0..1, so --min-score 2 filters everything.
         let out = e.run(&["search", "--min-score", "2", "test"]);
         out.assert_ok();
-        assert!(out.stderr.contains("No results"), "stderr: {}", out.stderr);
+        // qmd parity: the cli "No results found." message goes to stdout.
+        assert!(out.stdout.contains("No results"), "stdout: {}", out.stdout);
     }
 
     #[test]
@@ -965,9 +966,9 @@ mod collection_ignore_patterns {
 // ===========================================================================
 //
 // qmd's "custom-index search links include ?index= and can be passed back to
-// qmd get" (cli.test.ts:1314) is dropped: rqmd does not append a `?index=`
-// query suffix to `qmd://` URIs, so there is nothing to round-trip back to
-// `get`. The `--index` selection still works; only the link annotation differs.
+// qmd get" (cli.test.ts:1314) is ported in `mod custom_index_links` below:
+// search output now annotates `qmd://` links with `?index=<name>` for a
+// non-default index, and `get` honours that suffix to reopen the right index.
 mod search_output_formats {
     use crate::common::*;
 
@@ -1003,14 +1004,15 @@ mod search_output_formats {
         let e = seeded();
         let out = e.run(&["search", "--files", "-n", "1", "test"]);
         out.assert_ok();
-        // Format: #docid,score,<bare path>,"context"
+        // Format: #docid,score,qmd://collection/path,"context" (qmd parity:
+        // `outputResults` files branch uses the qmd:// URI, not a bare path).
         let line = first_line(&out.stdout);
         let parts: Vec<&str> = line.splitn(3, ',').collect();
         assert!(
             parts[0].starts_with('#') && is_hex6(&parts[0][1..]),
             "line: {line}"
         );
-        assert!(parts[2].starts_with("fixtures/"), "line: {line}");
+        assert!(parts[2].starts_with("qmd://fixtures/"), "line: {line}");
         assert!(out.stdout.contains(CTX), "stdout: {}", out.stdout);
         assert!(!out.stdout.contains("/Users/"));
         assert!(!out.stdout.contains("/home/"));
@@ -1024,7 +1026,7 @@ mod search_output_formats {
         assert!(out
             .stdout
             .contains("docid,score,file,title,context,line,snippet"));
-        // Data row: #docid,score,<bare path>,...
+        // Data row: #docid,score,qmd://collection/path,... (qmd parity).
         let row = out
             .stdout
             .lines()
@@ -1032,7 +1034,7 @@ mod search_output_formats {
             .expect("data row");
         let parts: Vec<&str> = row.splitn(4, ',').collect();
         assert!(is_hex6(&parts[0][1..]), "row: {row}");
-        assert!(parts[2].starts_with("fixtures/"), "row: {row}");
+        assert!(parts[2].starts_with("qmd://fixtures/"), "row: {row}");
         assert!(out.stdout.contains(CTX));
         assert!(!out.stdout.contains("/Users/"));
         assert!(!out.stdout.contains("/home/"));
@@ -1061,7 +1063,7 @@ mod search_output_formats {
             "stdout: {}",
             out.stdout
         );
-        assert!(out.stdout.contains("name=\"fixtures/"));
+        assert!(out.stdout.contains("name=\"qmd://fixtures/"));
         assert!(out.stdout.contains(&format!("context=\"{CTX}\"")));
         assert!(!out.stdout.contains("/Users/"));
         assert!(!out.stdout.contains("/home/"));
@@ -1072,13 +1074,74 @@ mod search_output_formats {
         let e = seeded();
         let out = e.run(&["search", "-n", "1", "test"]);
         out.assert_ok();
-        // rqmd's default CLI is a numbered list with a bare path + lowercase
-        // "context:" (no docid, no qmd:// prefix, no OSC-8 links).
-        assert!(out.stdout.contains("fixtures/"), "stdout: {}", out.stdout);
-        assert!(out.stdout.contains(&format!("context: {CTX}")));
+        // qmd-parity cli format (non-TTY): a `qmd://` path line with docid, then
+        // `Context:` and `Score:` lines. NO_COLOR + non-TTY ⇒ no ANSI / OSC-8.
+        assert!(
+            out.stdout.contains("qmd://fixtures/"),
+            "stdout: {}",
+            out.stdout
+        );
+        assert!(out.stdout.contains(&format!("Context: {CTX}")));
+        assert!(out.stdout.contains("Score:"), "stdout: {}", out.stdout);
         assert!(!out.stdout.contains('\u{1b}')); // no ANSI / OSC-8
         assert!(!out.stdout.contains("/Users/"));
         assert!(!out.stdout.contains("/home/"));
+    }
+}
+
+// ===========================================================================
+// custom-index ?index= links — search annotation + get round-trip
+// (port of qmd cli.test.ts:1314)
+// ===========================================================================
+mod custom_index_links {
+    use crate::common::*;
+
+    #[test]
+    fn search_links_include_index_and_get_round_trips() {
+        let e = env();
+        // One cache dir shared across all three invocations so the named-index
+        // DB (`<cache>/release-notes.sqlite`) persists between them. Using
+        // `spawn_cache` (no RQMD_INDEX_PATH) lets `--index <name>` and a link's
+        // `?index=<name>` both resolve to that file.
+        let cache = tempfile::tempdir().expect("mkdtemp cache");
+        let coll = "fixtures-alt";
+        let idx = "release-notes";
+
+        // 1. Index the fixtures under a non-default named index.
+        spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &["--index", idx, "collection", "add", ".", "--name", coll],
+        )
+        .assert_ok();
+
+        // 2. Search that index: the JSON `file` carries `?index=<name>`.
+        //    Flags precede the (variadic) query so `--json` isn't swallowed.
+        let s = spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &["--index", idx, "search", "--json", "-n", "1", "test"],
+        );
+        s.assert_ok();
+        let v: serde_json::Value = serde_json::from_str(&s.stdout).expect("json");
+        let file = v.as_array().expect("array")[0]["file"]
+            .as_str()
+            .expect("file field");
+        assert!(file.starts_with(&format!("qmd://{coll}/")), "file: {file}");
+        assert!(file.ends_with(&format!("?index={idx}")), "file: {file}");
+
+        // 3. Round-trip: feed the link to `get` WITHOUT `--index`; the `?index=`
+        //    suffix alone must reopen the right index DB.
+        let g = spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &["get", file, "-l", "2"],
+        );
+        g.assert_ok();
+        assert!(!g.stdout.trim().is_empty(), "stdout: {}", g.stdout);
     }
 }
 

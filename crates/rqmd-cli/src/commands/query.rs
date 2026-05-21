@@ -6,22 +6,26 @@
 //! prefixes); structured input routes to `structured_search`, plain or
 //! `expand:` input falls through to `hybrid_query`.
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use rqmd_core::Store;
+use rqmd_core::store::virtual_path::resolve_virtual_path;
 use rqmd_core::store_ops::{
     hybrid_query, structured_search, ExpandedQuery, ExpandedQueryType, HybridQueryOptions,
-    HybridQueryResult, SearchHooks, StructuredSearchOptions,
+    SearchHooks, StructuredSearchOptions,
 };
 use rqmd_core::llm::traits::Llm;
+use rqmd_core::Store;
 use serde_json::json;
 
 use crate::cli::QueryArgs;
 use crate::collection_filter::{filter_by_collections, resolve_collection_filter, single_collection};
 use crate::color::Palette;
 use crate::output::OutputFormat;
-use crate::search_view::{hybrid_result_to_hit, print_hits, ExplainView, Hit};
+use crate::search_view::{
+    editor_uri_template, hybrid_result_to_hit, print_hits, to_qmd_path, CliLinkCtx, ExplainView, Hit,
+};
 use crate::state::IndexState;
 
 pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
@@ -47,6 +51,26 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
     });
     let min_score = Some(args.flags.min_score.unwrap_or(0.0));
 
+    // Active index name for `?index=` link annotation (captured before the
+    // store borrow). `idx` is the non-default name (or None).
+    let index_name = state.index_name().to_string();
+    let idx = (index_name != "index").then_some(index_name.as_str());
+
+    // Query string used for snippet highlighting / `:line` matching in the cli
+    // format. For a structured document qmd uses the first lex (then vec) query
+    // (`displayQuery`, qmd.ts:2609-2612); a plain query uses itself.
+    let display_query = parsed
+        .as_ref()
+        .map(|pq| {
+            pq.searches
+                .iter()
+                .find(|s| s.type_ == ExpandedQueryType::Lex)
+                .or_else(|| pq.searches.iter().find(|s| s.type_ == ExpandedQueryType::Vec))
+                .map(|s| s.query.clone())
+                .unwrap_or_else(|| q.clone())
+        })
+        .unwrap_or_else(|| q.clone());
+
     // Resolve the collection filter (TS `resolveCollectionFilter(opts.collection,
     // true)`, qmd.ts:2499) before borrowing the LLM/store — the helper returns an
     // owned Vec so the `&mut Config` borrow is released here. `-c` omitted →
@@ -54,6 +78,13 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
     let collection_names =
         resolve_collection_filter(state.config_mut()?, &args.flags.collection, true)?;
     let single = single_collection(&collection_names);
+
+    // Clickable-link context for the cli format (resolved before the LLM/store
+    // borrow).
+    let link = CliLinkCtx {
+        editor_template: editor_uri_template(state.config_mut()?.data().editor_uri.as_deref()),
+        stdout_tty: std::io::stdout().is_terminal(),
+    };
 
     let llm = state.llama_cpp()?;
     let store: &Store = state.store_mut()?;
@@ -106,20 +137,23 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
     // (TS `filterByCollections`, qmd.ts:2597-2602). No-op for 0/1 collection.
     let results = filter_by_collections(results, &collection_names, |r| r.file.as_str());
 
-    let hits: Vec<Hit> = results
+    let mut hits: Vec<Hit> = results
         .iter()
-        .map(|r| hybrid_result_to_hit(r, args.flags.full))
+        .map(|r| hybrid_result_to_hit(r, args.flags.full, idx))
         .collect();
 
-    // `--explain` is only honoured for JSON (full trace) and CLI (stderr
-    // summary); other formats render the hits and silently drop the trace —
-    // CSV/MD/XML/files have no natural slot for it.
+    // `--explain` is honoured for JSON (full trace) and the cli format (an
+    // inline block per hit, rendered by `print_hits_cli` from `Hit.explain`);
+    // CSV/MD/XML/files have no natural slot and silently drop the trace.
     if fmt == OutputFormat::Json && args.explain {
         // Build a top-level object that pairs each Hit with its trace.
-        // ExplainView borrows from `results`, so this stays alloc-light.
         let explains: Vec<ExplainView<'_>> = results
             .iter()
-            .filter_map(|r| r.explain.as_ref().map(|e| ExplainView::new(&r.file, e)))
+            .filter_map(|r| {
+                r.explain
+                    .as_ref()
+                    .map(|e| ExplainView::new(to_qmd_path(&r.display_path, idx), e))
+            })
             .collect();
         let s = serde_json::to_string_pretty(&json!({
             "hits": hits,
@@ -127,10 +161,18 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
         }))?;
         println!("{s}");
     } else {
-        print_hits(&hits, fmt, p, args.flags.line_numbers)?;
-        if fmt == OutputFormat::Cli && args.explain {
-            print_explain_summary(&results, p);
+        // Resolve absolute paths for the cli format's OSC-8 links (TTY only).
+        if fmt == OutputFormat::Cli && link.stdout_tty {
+            store.with_connection(|conn| {
+                for h in &mut hits {
+                    h.abs_path = resolve_virtual_path(conn, &h.file)
+                        .ok()
+                        .flatten()
+                        .map(|pp| pp.to_string_lossy().into_owned());
+                }
+            });
         }
+        print_hits(&hits, fmt, p, args.flags.line_numbers, &display_query, &link)?;
     }
     Ok(())
 }
@@ -295,23 +337,6 @@ fn log_structured_summary(
         eprintln!("{}├─ {}: {preview}{}", p.dim(), type_label(s.type_), p.reset());
     }
     eprintln!("{}└─ Searching...{}", p.dim(), p.reset());
-}
-
-/// One-line per-hit summary written to stderr (CLI mode only). Detailed
-/// trace lives behind `--explain --json`.
-fn print_explain_summary(results: &[HybridQueryResult], p: &Palette) {
-    for r in results {
-        let Some(e) = &r.explain else { continue };
-        eprintln!(
-            "  {}{}{}  rrf.total={:.3}  rerank={:.3}  blended={:.3}",
-            p.dim(),
-            r.display_path,
-            p.reset(),
-            e.rrf.total_score,
-            e.rerank_score,
-            e.blended_score,
-        );
-    }
 }
 
 /// Verbose progress logging only in the human CLI mode — any

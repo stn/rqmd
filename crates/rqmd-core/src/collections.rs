@@ -641,7 +641,7 @@ pub fn is_valid_collection_name(name: &str) -> bool {
 ///
 /// NOTE: `rqmd` sanitizes both `/` and `\\` (and `:`); the original qmd TS only
 /// stripped `/`, which produces broken filenames on Windows.
-fn sanitize_index_name(name: &str) -> String {
+pub fn sanitize_index_name(name: &str) -> String {
     if !name.contains('/') && !name.contains('\\') {
         return name.to_string();
     }

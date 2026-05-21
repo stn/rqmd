@@ -10,10 +10,173 @@ use serde::Serialize;
 use rqmd_core::store::rrf::{HybridQueryExplain, QueryType, RRFContributionTrace, RRFExplain};
 use rqmd_core::store::search::{SearchResult, SearchSource};
 use rqmd_core::store::snippet::{add_line_numbers, extract_snippet};
+use rqmd_core::store::virtual_path::{build_virtual_path, parse_virtual_path};
 use rqmd_core::store_ops::{HybridQueryResult, VectorSearchResult};
 
 use crate::color::Palette;
 use crate::output::{escape_csv, escape_xml, OutputFormat};
+
+/// Build a `qmd://` URI from a bare `collection/path` display path, appending
+/// `?index=<name>` only for a non-default index. Mirrors qmd's `toQmdPath`
+/// helper inside `outputResults` (`qmd.ts:2106-2117`): a display path with no
+/// `/` (or an empty trailing segment) is returned as `qmd://<display_path>`
+/// unchanged. `index_name` is `Some` only when the active index != `"index"`.
+pub fn to_qmd_path(display_path: &str, index_name: Option<&str>) -> String {
+    match display_path.split_once('/') {
+        Some((coll, rest)) if !coll.is_empty() && !rest.is_empty() => {
+            build_virtual_path(coll, rest, index_name)
+        }
+        _ => format!("qmd://{display_path}"),
+    }
+}
+
+// ============================================================================
+// CLI ("cli") human-format helpers — port of qmd `outputResults`'s cli branch
+// and its helpers (`qmd.ts:1972-2095`, 2150-2228).
+// ============================================================================
+
+/// Default editor URI template when no env var / config override is set
+/// (`qmd.ts:2046`).
+pub const DEFAULT_EDITOR_URI_TEMPLATE: &str = "vscode://file/{path}:{line}:{col}";
+
+/// Resolve the editor-URI template for clickable CLI links. Precedence
+/// (mirrors `getEditorUriTemplate`, `qmd.ts:2054-2078`): env `RQMD_EDITOR_URI`
+/// (rqmd-native) → env `QMD_EDITOR_URI` → config `editor_uri`
+/// (`editor_uri_template` alias handled on deserialize) → built-in default.
+pub fn editor_uri_template(config_editor_uri: Option<&str>) -> String {
+    for var in ["RQMD_EDITOR_URI", "QMD_EDITOR_URI"] {
+        if let Ok(t) = std::env::var(var) {
+            let t = t.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    if let Some(t) = config_editor_uri {
+        let t = t.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    DEFAULT_EDITOR_URI_TEMPLATE.to_string()
+}
+
+/// Percent-encode an absolute path for an editor URI. Mirrors qmd's
+/// `encodePathForEditorUri` (`qmd.ts:2048-2052`): JS `encodeURI` (leaves the
+/// unreserved + reserved set and `#`), then additionally encodes `?` and `#`.
+fn encode_path_for_editor_uri(abs_path: &str) -> String {
+    // Bytes JS `encodeURI` leaves unescaped, besides ASCII alphanumerics.
+    const KEEP: &[u8] = b"-_.!~*'();,/?:@&=+$#";
+    let mut out = String::with_capacity(abs_path.len());
+    for &b in abs_path.as_bytes() {
+        if b.is_ascii_alphanumeric() || KEEP.contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out.replace('?', "%3F").replace('#', "%23")
+}
+
+/// Substitute `{path}`/`{line}`/`{col}`/`{column}` in an editor-URI template.
+/// Mirrors `buildEditorUri` (`qmd.ts:2080-2090`). `line`/`col` are clamped to
+/// `>= 1`.
+pub fn build_editor_uri(template: &str, abs_path: &str, line: usize, col: usize) -> String {
+    let safe_line = line.max(1);
+    let safe_col = col.max(1);
+    let encoded = encode_path_for_editor_uri(abs_path);
+    template
+        .replace("{path}", &encoded)
+        .replace("{line}", &safe_line.to_string())
+        .replace("{col}", &safe_col.to_string())
+        .replace("{column}", &safe_col.to_string())
+}
+
+/// Wrap `text` in an OSC-8 hyperlink to `url` when `is_tty`; otherwise return
+/// `text` unchanged. Mirrors `termLink` (`qmd.ts:2092-2095`).
+pub fn term_link(text: &str, url: &str, is_tty: bool) -> String {
+    if !is_tty {
+        return text.to_string();
+    }
+    format!("\x1b]8;;{url}\x07{text}\x1b]8;;\x07")
+}
+
+/// Highlight query terms (length >= 3, ASCII case-insensitive) in `text` with
+/// yellow+bold. No-op when colour is disabled. Mirrors `highlightTerms`
+/// (`qmd.ts:1972-1981`).
+pub fn highlight_terms(text: &str, query: &str, p: &Palette) -> String {
+    if !p.enabled {
+        return text.to_string();
+    }
+    let pre = format!("{}{}", p.yellow(), p.bold());
+    let post = p.reset();
+    let mut result = text.to_string();
+    for term in query.split_whitespace().filter(|t| t.chars().count() >= 3) {
+        result = wrap_ascii_ci(&result, term, &pre, post);
+    }
+    result
+}
+
+/// Wrap every ASCII-case-insensitive occurrence of `needle` in `haystack` with
+/// `pre`/`post`. `to_ascii_lowercase` preserves byte length, so match offsets
+/// align with the original and slicing always lands on char boundaries.
+fn wrap_ascii_ci(haystack: &str, needle: &str, pre: &str, post: &str) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+    let hay_lc = haystack.to_ascii_lowercase();
+    let needle_lc = needle.to_ascii_lowercase();
+    let n = needle_lc.len();
+    let mut out = String::with_capacity(haystack.len());
+    let mut i = 0;
+    while i < haystack.len() {
+        if hay_lc.as_bytes()[i..].starts_with(needle_lc.as_bytes()) {
+            out.push_str(pre);
+            out.push_str(&haystack[i..i + n]);
+            out.push_str(post);
+            i += n;
+        } else {
+            let ch = haystack[i..].chars().next().expect("char boundary");
+            let clen = ch.len_utf8();
+            out.push_str(&haystack[i..i + clen]);
+            i += clen;
+        }
+    }
+    out
+}
+
+/// Format a score as a colour-coded, 3-wide percentage. Mirrors `formatScore`
+/// (`qmd.ts:1984-1990`): green >= 70%, yellow >= 40%, dim below.
+pub fn format_score(score: f64, p: &Palette) -> String {
+    let pct = format!("{:>3}", (score * 100.0).round() as i64);
+    if !p.enabled {
+        return format!("{pct}%");
+    }
+    let color = if score >= 0.7 {
+        p.green()
+    } else if score >= 0.4 {
+        p.yellow()
+    } else {
+        p.dim()
+    };
+    format!("{color}{pct}%{}", p.reset())
+}
+
+/// `value.toFixed(4)` (`qmd.ts:1992-1994`).
+fn format_explain_number(value: f64) -> String {
+    format!("{value:.4}")
+}
+
+/// Per-invocation context for the CLI format's clickable links (qmd resolves
+/// these once at the top of the cli branch, `qmd.ts:2151-2152`).
+pub struct CliLinkCtx {
+    /// Editor-URI template (see [`editor_uri_template`]).
+    pub editor_template: String,
+    /// Whether stdout is a TTY — gates OSC-8 link emission (qmd uses
+    /// `process.stdout.isTTY`; note rqmd's [`Palette`] gates *colour* on stderr,
+    /// so colour and link-ability deliberately use different streams).
+    pub stdout_tty: bool,
+}
 
 /// Normalised search hit. Owned because two of three input types have
 /// nested / `Option<String>` body shapes and lifetimes get complicated.
@@ -32,6 +195,16 @@ pub struct Hit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     pub docid: String,
+    /// Absolute filesystem path, resolved by the command while the store
+    /// connection is open, for the CLI format's OSC-8 clickable links. Never
+    /// serialized (qmd's JSON has no such field).
+    #[serde(skip)]
+    pub abs_path: Option<String>,
+    /// RRF/rerank trace, present only for `query --explain`. Rendered inline by
+    /// the CLI format (qmd `outputResults` cli branch); the JSON `--explain`
+    /// path uses [`ExplainView`] separately. Never serialized here.
+    #[serde(skip)]
+    pub explain: Option<HybridQueryExplain>,
 }
 
 pub fn search_result_to_hit(
@@ -39,6 +212,7 @@ pub fn search_result_to_hit(
     query: &str,
     intent: Option<&str>,
     full: bool,
+    index_name: Option<&str>,
 ) -> Hit {
     let body = r.doc.body.as_deref().unwrap_or("");
     let snip = extract_snippet(
@@ -50,7 +224,7 @@ pub fn search_result_to_hit(
         intent,
     );
     Hit {
-        file: r.doc.filepath.clone(),
+        file: to_qmd_path(&r.doc.display_path, index_name),
         display_path: r.doc.display_path.clone(),
         title: r.doc.title.clone(),
         score: r.score,
@@ -59,6 +233,8 @@ pub fn search_result_to_hit(
         snippet: snip.snippet,
         body: full.then(|| body.to_string()),
         docid: r.doc.docid.clone(),
+        abs_path: None,
+        explain: None,
     }
 }
 
@@ -67,10 +243,11 @@ pub fn vector_result_to_hit(
     query: &str,
     intent: Option<&str>,
     full: bool,
+    index_name: Option<&str>,
 ) -> Hit {
     let snip = extract_snippet(&r.body, query, None, None, None, intent);
     Hit {
-        file: r.file.clone(),
+        file: to_qmd_path(&r.display_path, index_name),
         display_path: r.display_path.clone(),
         title: r.title.clone(),
         score: r.score,
@@ -79,12 +256,14 @@ pub fn vector_result_to_hit(
         snippet: snip.snippet,
         body: full.then(|| r.body.clone()),
         docid: r.docid.clone(),
+        abs_path: None,
+        explain: None,
     }
 }
 
-pub fn hybrid_result_to_hit(r: &HybridQueryResult, full: bool) -> Hit {
+pub fn hybrid_result_to_hit(r: &HybridQueryResult, full: bool, index_name: Option<&str>) -> Hit {
     Hit {
-        file: r.file.clone(),
+        file: to_qmd_path(&r.display_path, index_name),
         display_path: r.display_path.clone(),
         title: r.title.clone(),
         score: r.score,
@@ -93,6 +272,8 @@ pub fn hybrid_result_to_hit(r: &HybridQueryResult, full: bool) -> Hit {
         snippet: r.best_chunk.clone(),
         body: full.then(|| r.body.clone()),
         docid: r.docid.clone(),
+        abs_path: None,
+        explain: r.explain.clone(),
     }
 }
 
@@ -121,35 +302,166 @@ fn render_content(h: &Hit, line_numbers: bool) -> String {
     }
 }
 
-pub fn print_hits_cli(hits: &[Hit], p: &Palette, line_numbers: bool) {
+/// Human "cli" search output. Full port of qmd `outputResults`'s cli branch
+/// (`qmd.ts:2150-2228`): a `qmd://` (or OSC-8-clickable, on a TTY) path line
+/// with optional `:line` and docid, then `Title:`/`Context:`/`Score:` lines,
+/// an optional `--explain` block, a blank line, and the term-highlighted
+/// snippet (or full body). Results are separated by a blank line.
+pub fn print_hits_cli(
+    hits: &[Hit],
+    p: &Palette,
+    line_numbers: bool,
+    query: &str,
+    link: &CliLinkCtx,
+) {
     if hits.is_empty() {
-        eprintln!("{}No results.{}", p.dim(), p.reset());
+        // qmd `printEmptySearchResults` cli default (`qmd.ts:2028`).
+        println!("No results found.");
         return;
     }
+    let query_lc = query.to_lowercase();
+    let n = hits.len();
     for (i, h) in hits.iter().enumerate() {
-        println!(
-            "{}{}.{} {}{}{}:{} {}({:.3}){}",
-            p.bold(),
-            i + 1,
-            p.reset(),
-            p.cyan(),
-            h.display_path,
-            p.reset(),
-            h.line,
-            p.dim(),
-            h.score,
-            p.reset(),
-        );
-        if !h.title.is_empty() && h.title != h.display_path {
-            println!("   {}{}{}", p.dim(), h.title, p.reset());
+        // `:line` is shown only when a query term actually matched in the
+        // snippet body — excluding the `@@ … @@` diff header line that
+        // `extract_snippet` prepends (qmd.ts:2169-2170).
+        let snippet_body = h
+            .snippet
+            .split('\n')
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase();
+        let has_match = query_lc
+            .split_whitespace()
+            .any(|t| !t.is_empty() && snippet_body.contains(t));
+        let line_info = if has_match {
+            format!(":{}", h.line)
+        } else {
+            String::new()
+        };
+        let docid_str = if h.docid.is_empty() {
+            String::new()
+        } else {
+            format!(" {}#{}{}", p.dim(), h.docid, p.reset())
+        };
+
+        // Line 1: on a TTY (with a resolved abs path), an OSC-8 link whose text
+        // is the collection-relative path; otherwise the full `qmd://…[?index=]`
+        // link (qmd.ts:2160-2186).
+        let parsed_rel = parse_virtual_path(&h.file)
+            .ok()
+            .map(|vp| vp.path)
+            .filter(|s| !s.is_empty());
+        let line1 = match (
+            link.stdout_tty,
+            h.abs_path.as_deref(),
+            parsed_rel.as_deref(),
+        ) {
+            (true, Some(abs), Some(rel)) => {
+                let link_line = if has_match { h.line } else { 1 };
+                let target = build_editor_uri(&link.editor_template, abs, link_line, 1);
+                let clickable = term_link(&format!("{rel}{line_info}"), &target, true);
+                format!("{}{clickable}{}{docid_str}", p.cyan(), p.reset())
+            }
+            _ => format!(
+                "{}{}{}{line_info}{}{docid_str}",
+                p.cyan(),
+                h.file,
+                p.dim(),
+                p.reset()
+            ),
+        };
+        println!("{line1}");
+
+        if !h.title.is_empty() {
+            println!("{}Title: {}{}", p.bold(), h.title, p.reset());
         }
         if let Some(ctx) = &h.context {
-            println!("   {}context:{} {ctx}", p.dim(), p.reset());
+            println!("{}Context: {}{}", p.dim(), ctx, p.reset());
         }
-        for line in render_content(h, line_numbers).lines() {
-            println!("   {line}");
+        println!(
+            "Score: {}{}{}",
+            p.bold(),
+            format_score(h.score, p),
+            p.reset()
+        );
+
+        if let Some(e) = &h.explain {
+            print_explain_block(e, p);
         }
+
         println!();
+        let content = render_content(h, line_numbers);
+        println!("{}", highlight_terms(&content, query, p));
+
+        // Double blank between results (qmd `console.log('\n')`, qmd.ts:2227).
+        if i < n - 1 {
+            println!("\n");
+        }
+    }
+}
+
+/// The `--explain` block in the cli format (qmd.ts:2195-2218).
+fn print_explain_block(e: &HybridQueryExplain, p: &Palette) {
+    let join_scores = |xs: &[f64]| -> String {
+        if xs.is_empty() {
+            "none".to_string()
+        } else {
+            xs.iter()
+                .map(|v| format_explain_number(*v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    println!(
+        "{}Explain: fts=[{}] vec=[{}]{}",
+        p.dim(),
+        join_scores(&e.fts_scores),
+        join_scores(&e.vector_scores),
+        p.reset()
+    );
+    println!(
+        "{}  RRF: total={} base={} bonus={} rank={}{}",
+        p.dim(),
+        format_explain_number(e.rrf.total_score),
+        format_explain_number(e.rrf.base_score),
+        format_explain_number(e.rrf.top_rank_bonus),
+        e.rrf.rank,
+        p.reset(),
+    );
+    println!(
+        "{}  Blend: {}%*{} + {}%*{} = {}{}",
+        p.dim(),
+        (e.rrf.weight * 100.0).round() as i64,
+        format_explain_number(e.rrf.position_score),
+        ((1.0 - e.rrf.weight) * 100.0).round() as i64,
+        format_explain_number(e.rerank_score),
+        format_explain_number(e.blended_score),
+        p.reset(),
+    );
+    let mut contribs: Vec<&RRFContributionTrace> = e.rrf.contributions.iter().collect();
+    contribs.sort_by(|a, b| {
+        b.rrf_contribution
+            .partial_cmp(&a.rrf_contribution)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let summary = contribs
+        .iter()
+        .take(3)
+        .map(|c| {
+            format!(
+                "{}/{}#{}:{}",
+                source_str(c.source),
+                query_type_str(c.query_type),
+                c.rank,
+                format_explain_number(c.rrf_contribution)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if !summary.is_empty() {
+        println!("{}  Top RRF contributions: {summary}{}", p.dim(), p.reset());
     }
 }
 
@@ -168,7 +480,7 @@ pub fn fmt_hits_csv(hits: &[Hit], line_numbers: bool) -> String {
             "#{},{:.4},{},{},{},{},{}",
             h.docid,
             h.score,
-            escape_csv(&h.display_path),
+            escape_csv(&h.file),
             escape_csv(&h.title),
             escape_csv(h.context.as_deref().unwrap_or("")),
             h.line,
@@ -185,13 +497,14 @@ pub fn print_hits_csv(hits: &[Hit], line_numbers: bool) {
 pub fn fmt_hits_files(hits: &[Hit]) -> String {
     hits.iter()
         .map(|h| {
-            // `display_path` is intentionally NOT CSV-escaped — matches qmd
-            // formatter.ts:164. Paths with commas/quotes pass through raw.
+            // `file` is the `qmd://...[?index=]` URI (qmd `outputResults` files
+            // branch, `qmd.ts:2179`). Intentionally NOT CSV-escaped — matches
+            // qmd. Paths with commas/quotes pass through raw.
             if let Some(ctx) = &h.context {
                 let esc = ctx.replace('"', "\"\"");
-                format!("#{},{:.2},{},\"{esc}\"", h.docid, h.score, h.display_path)
+                format!("#{},{:.2},{},\"{esc}\"", h.docid, h.score, h.file)
             } else {
-                format!("#{},{:.2},{}", h.docid, h.score, h.display_path)
+                format!("#{},{:.2},{}", h.docid, h.score, h.file)
             }
         })
         .collect::<Vec<_>>()
@@ -256,7 +569,7 @@ pub fn fmt_hits_xml(hits: &[Hit], line_numbers: bool) -> String {
             format!(
                 "<file docid=\"#{docid}\" name=\"{name}\"{title_attr}{context_attr}>\n{body}\n</file>",
                 docid = h.docid,
-                name = escape_xml(&h.display_path),
+                name = escape_xml(&h.file),
                 body = escape_xml(&content),
             )
         })
@@ -278,9 +591,11 @@ pub fn print_hits(
     format: OutputFormat,
     p: &Palette,
     line_numbers: bool,
+    query: &str,
+    link: &CliLinkCtx,
 ) -> anyhow::Result<()> {
     match format {
-        OutputFormat::Cli => print_hits_cli(hits, p, line_numbers),
+        OutputFormat::Cli => print_hits_cli(hits, p, line_numbers, query, link),
         OutputFormat::Json => print_hits_json(hits)?,
         OutputFormat::Csv => print_hits_csv(hits, line_numbers),
         OutputFormat::Md => print_hits_md(hits, line_numbers),
@@ -299,7 +614,9 @@ pub fn print_hits(
 /// upstream surfaces as a compile error rather than silently broken JSON.
 #[derive(Debug, Serialize)]
 pub struct ExplainView<'a> {
-    pub file: &'a str,
+    /// Owned because it's the `?index=`-annotated `qmd://` link built per row,
+    /// not a field borrowed from the core result.
+    pub file: String,
     pub fts_scores: &'a [f64],
     pub vector_scores: &'a [f64],
     pub rrf: RrfExplainView<'a>,
@@ -331,7 +648,7 @@ pub struct ContributionView<'a> {
 }
 
 impl<'a> ExplainView<'a> {
-    pub fn new(file: &'a str, e: &'a HybridQueryExplain) -> Self {
+    pub fn new(file: String, e: &'a HybridQueryExplain) -> Self {
         Self {
             file,
             fts_scores: &e.fts_scores,
@@ -475,6 +792,8 @@ mod tests {
             snippet: snippet.to_string(),
             body: body.map(String::from),
             docid: docid.to_string(),
+            abs_path: None,
+            explain: None,
         }
     }
 
@@ -734,5 +1053,104 @@ mod tests {
         let out = mcp_results_to_csv(&rows);
         assert!(out.lines().next().unwrap().contains("context"));
         assert!(out.contains(TEST_CONTEXT));
+    }
+
+    // ========================================================================
+    // ?index= link annotation + cli-format helpers (qmd parity)
+    // ========================================================================
+
+    #[test]
+    fn to_qmd_path_default_index_has_no_query() {
+        assert_eq!(
+            to_qmd_path("fixtures/test1.md", None),
+            "qmd://fixtures/test1.md"
+        );
+    }
+
+    #[test]
+    fn to_qmd_path_custom_index_appends_query() {
+        assert_eq!(
+            to_qmd_path("fixtures/a/b.md", Some("release-notes")),
+            "qmd://fixtures/a/b.md?index=release-notes"
+        );
+    }
+
+    #[test]
+    fn to_qmd_path_no_slash_is_left_bare() {
+        // No `/` → returned as `qmd://<display_path>`, no `?index=` (qmd parity).
+        assert_eq!(to_qmd_path("fixtures", Some("x")), "qmd://fixtures");
+    }
+
+    #[test]
+    fn to_qmd_path_trailing_slash_keeps_bare() {
+        // Empty trailing segment → bare, matching qmd's `segments.length === 0`.
+        assert_eq!(to_qmd_path("fixtures/", Some("x")), "qmd://fixtures/");
+    }
+
+    #[test]
+    fn to_qmd_path_encodes_index_name() {
+        assert_eq!(
+            to_qmd_path("c/p.md", Some("a b")),
+            "qmd://c/p.md?index=a%20b"
+        );
+    }
+
+    #[test]
+    fn term_link_wraps_only_on_tty() {
+        assert_eq!(term_link("text", "url", false), "text");
+        assert_eq!(
+            term_link("text", "url", true),
+            "\x1b]8;;url\x07text\x1b]8;;\x07"
+        );
+    }
+
+    #[test]
+    fn build_editor_uri_substitutes_placeholders() {
+        let s = build_editor_uri("vscode://file/{path}:{line}:{col}", "/a/b.md", 12, 1);
+        assert_eq!(s, "vscode://file//a/b.md:12:1");
+    }
+
+    #[test]
+    fn build_editor_uri_column_alias_and_clamp_and_encode() {
+        // {column} alias, line/col clamped to >= 1, space percent-encoded.
+        let s = build_editor_uri("e://{path}#{line},{column}", "/x y.md", 0, 0);
+        assert_eq!(s, "e:///x%20y.md#1,1");
+    }
+
+    #[test]
+    fn highlight_terms_noop_when_color_disabled() {
+        let p = Palette { enabled: false };
+        assert_eq!(highlight_terms("hello world", "world", &p), "hello world");
+    }
+
+    #[test]
+    fn highlight_terms_wraps_long_terms_case_insensitively() {
+        let p = Palette { enabled: true };
+        let out = highlight_terms("Hello WORLD", "world", &p);
+        assert_eq!(
+            out,
+            format!("Hello {}{}WORLD{}", p.yellow(), p.bold(), p.reset())
+        );
+    }
+
+    #[test]
+    fn highlight_terms_skips_short_terms() {
+        let p = Palette { enabled: true };
+        assert_eq!(highlight_terms("a of b", "of", &p), "a of b");
+    }
+
+    #[test]
+    fn format_score_plain_when_disabled() {
+        let p = Palette { enabled: false };
+        assert_eq!(format_score(0.842, &p), " 84%");
+        assert_eq!(format_score(0.05, &p), "  5%");
+    }
+
+    #[test]
+    fn format_score_colors_by_threshold() {
+        let p = Palette { enabled: true };
+        assert!(format_score(0.8, &p).contains(p.green()));
+        assert!(format_score(0.5, &p).contains(p.yellow()));
+        assert!(format_score(0.1, &p).contains(p.dim()));
     }
 }

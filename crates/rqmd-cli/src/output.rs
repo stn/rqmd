@@ -123,7 +123,7 @@ fn fmt_json(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
         .map(|r| match r {
             MultiGetResult::Found(doc) => {
                 let mut obj = json!({
-                    "file": doc.display_path,
+                    "file": doc.filepath,
                     "title": title_of(doc),
                     "body": truncate_lines(doc.body.as_deref().unwrap_or(""), max_lines),
                 });
@@ -133,11 +133,11 @@ fn fmt_json(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
                 obj
             }
             MultiGetResult::Skipped {
-                filepath: _,
+                filepath,
                 display_path,
                 skip_reason,
             } => json!({
-                "file": display_path,
+                "file": filepath,
                 "title": skipped_title(display_path),
                 "skipped": true,
                 "reason": skip_reason,
@@ -153,7 +153,7 @@ fn fmt_csv(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
     for r in results {
         let row = match r {
             MultiGetResult::Found(doc) => [
-                escape_csv(&doc.display_path),
+                escape_csv(&doc.filepath),
                 escape_csv(&title_of(doc)),
                 escape_csv(doc.context.as_deref().unwrap_or("")),
                 "false".to_string(),
@@ -163,11 +163,11 @@ fn fmt_csv(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
                 )),
             ],
             MultiGetResult::Skipped {
+                filepath,
                 display_path,
                 skip_reason,
-                ..
             } => [
-                escape_csv(display_path),
+                escape_csv(filepath),
                 escape_csv(&skipped_title(display_path)),
                 String::new(),
                 "true".to_string(),
@@ -187,13 +187,13 @@ fn fmt_files(results: &[MultiGetResult]) -> String {
             MultiGetResult::Found(doc) => {
                 if let Some(ctx) = &doc.context {
                     let esc = ctx.replace('"', "\"\"");
-                    out.push_str(&format!("{},\"{esc}\"\n", doc.display_path));
+                    out.push_str(&format!("{},\"{esc}\"\n", doc.filepath));
                 } else {
-                    out.push_str(&format!("{}\n", doc.display_path));
+                    out.push_str(&format!("{}\n", doc.filepath));
                 }
             }
-            MultiGetResult::Skipped { display_path, .. } => {
-                out.push_str(&format!("{display_path},[SKIPPED]\n"));
+            MultiGetResult::Skipped { filepath, .. } => {
+                out.push_str(&format!("{filepath},[SKIPPED]\n"));
             }
         }
     }
@@ -205,9 +205,9 @@ fn fmt_md(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
     for r in results {
         match r {
             MultiGetResult::Found(doc) => {
-                out.push_str(&format!("## {}\n\n", doc.display_path));
+                out.push_str(&format!("## {}\n\n", doc.filepath));
                 let title = title_of(doc);
-                if title != doc.display_path {
+                if title != doc.filepath {
                     out.push_str(&format!("**Title:** {title}\n\n"));
                 }
                 if let Some(ctx) = &doc.context {
@@ -221,11 +221,11 @@ fn fmt_md(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
                 out.push_str("```\n\n");
             }
             MultiGetResult::Skipped {
-                display_path,
+                filepath,
                 skip_reason,
                 ..
             } => {
-                out.push_str(&format!("## {display_path}\n\n"));
+                out.push_str(&format!("## {filepath}\n\n"));
                 out.push_str(&format!("> {skip_reason}\n\n"));
             }
         }
@@ -239,10 +239,7 @@ fn fmt_xml(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
         out.push_str("  <document>\n");
         match r {
             MultiGetResult::Found(doc) => {
-                out.push_str(&format!(
-                    "    <file>{}</file>\n",
-                    escape_xml(&doc.display_path)
-                ));
+                out.push_str(&format!("    <file>{}</file>\n", escape_xml(&doc.filepath)));
                 out.push_str(&format!(
                     "    <title>{}</title>\n",
                     escape_xml(&title_of(doc))
@@ -259,11 +256,11 @@ fn fmt_xml(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
                 ));
             }
             MultiGetResult::Skipped {
-                display_path,
+                filepath,
                 skip_reason,
                 ..
             } => {
-                out.push_str(&format!("    <file>{}</file>\n", escape_xml(display_path)));
+                out.push_str(&format!("    <file>{}</file>\n", escape_xml(filepath)));
                 out.push_str("    <skipped>true</skipped>\n");
                 out.push_str(&format!(
                     "    <reason>{}</reason>\n",
@@ -284,7 +281,7 @@ fn fmt_cli(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
         match r {
             MultiGetResult::Found(doc) => {
                 out.push_str(&format!("\n{bar}\n"));
-                out.push_str(&format!("File: {}\n", doc.display_path));
+                out.push_str(&format!("File: {}\n", doc.filepath));
                 out.push_str(&format!("{bar}\n\n"));
                 if let Some(ctx) = &doc.context {
                     out.push_str(&format!("Folder Context: {ctx}\n---\n\n"));
@@ -295,12 +292,12 @@ fn fmt_cli(results: &[MultiGetResult], max_lines: Option<usize>) -> String {
                 ));
             }
             MultiGetResult::Skipped {
-                display_path,
+                filepath,
                 skip_reason,
                 ..
             } => {
                 out.push_str(&format!("\n{bar}\n"));
-                out.push_str(&format!("File: {display_path}\n"));
+                out.push_str(&format!("File: {filepath}\n"));
                 out.push_str(&format!("{bar}\n\n"));
                 out.push_str(&format!("[SKIPPED: {skip_reason}]\n"));
             }
@@ -404,7 +401,7 @@ mod tests {
     fn make_doc(context: Option<&str>) -> DocumentResult {
         DocumentResult {
             filepath: "qmd://archive/summit/keynote.md".to_string(),
-            display_path: "qmd://archive/summit/keynote.md".to_string(),
+            display_path: "archive/summit/keynote.md".to_string(),
             title: "Summit Keynote".to_string(),
             context: context.map(String::from),
             hash: "dc5590abcdef".to_string(),
@@ -546,6 +543,7 @@ mod tests {
     fn single_doc_md_heading_falls_back_to_display_path_when_title_empty() {
         let mut doc = make_doc(Some(TEST_CONTEXT));
         doc.title = String::new();
-        assert!(document_to_md(&doc).starts_with("# qmd://archive/summit/keynote.md\n"));
+        // single-doc formatters keep the bare `display_path` (qmd `documentTo*`).
+        assert!(document_to_md(&doc).starts_with("# archive/summit/keynote.md\n"));
     }
 }

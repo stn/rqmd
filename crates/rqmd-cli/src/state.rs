@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use rqmd_core::collections::{find_local_config_path, local_db_path, Config};
+use rqmd_core::collections::{find_local_config_path, local_db_path, sanitize_index_name, Config};
 use rqmd_core::llm::config::{resolve_models, ResolvedModels};
 use rqmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rqmd_core::llm::types::ModelResolutionConfig;
@@ -44,6 +44,31 @@ impl IndexState {
             config: None,
             llama: None,
         }
+    }
+
+    /// The active index name (default `"index"`). Used to annotate output
+    /// links with `?index=` for non-default indexes (qmd `getActiveIndexName`).
+    pub fn index_name(&self) -> &str {
+        &self.index_name
+    }
+
+    /// Switch the active index at runtime, dropping the lazily-opened store and
+    /// config so the next access reopens against the new index. Mirrors qmd's
+    /// `setIndexName` + `setConfigIndexName` (`qmd.ts:176-188`), used by `get`
+    /// to honour a `?index=` carried in a `qmd://` link.
+    ///
+    /// NOTE: `db_path_override = None` deliberately diverges from qmd's
+    /// `setIndexName` (which sets the override to the *resolved* path). rqmd
+    /// resolves lazily in [`Self::db_path`] via `default_db_path(Some(name))`,
+    /// so `None` correctly opens `<cache>/<name>.sqlite`. It also clears any
+    /// stale local-config (`.rqmd`) override picked up by [`Self::new`] so the
+    /// link's index — not the cwd — wins.
+    pub fn set_index_name(&mut self, name: &str) {
+        self.index_name = sanitize_index_name(name);
+        self.db_path_override = None;
+        self.config_path_override = None;
+        self.store = None;
+        self.config = None;
     }
 
     /// Path to the SQLite index that will be opened on first use.
@@ -195,5 +220,31 @@ mod tests {
         assert!(!observer.is_disposed());
         state.close().await;
         assert!(observer.is_disposed());
+    }
+
+    #[test]
+    fn set_index_name_switches_and_resets_lazy_handles() {
+        let mut state = IndexState::new(Some("index"));
+        assert_eq!(state.index_name(), "index");
+        // Pretend a local-config override was picked up.
+        state.db_path_override = Some(PathBuf::from("/tmp/local.sqlite"));
+        state.config_path_override = Some(PathBuf::from("/tmp/local.yml"));
+
+        state.set_index_name("release-notes");
+
+        assert_eq!(state.index_name(), "release-notes");
+        // Overrides cleared so the new index resolves from its name.
+        assert!(state.db_path_override.is_none());
+        assert!(state.config_path_override.is_none());
+        // Lazy handles dropped so the next access reopens the new index.
+        assert!(state.store.is_none());
+        assert!(state.config.is_none());
+    }
+
+    #[test]
+    fn set_index_name_sanitizes_path_like_names() {
+        let mut state = IndexState::new(None);
+        state.set_index_name("a/b");
+        assert!(!state.index_name().contains('/'));
     }
 }
