@@ -317,6 +317,23 @@ impl Drop for ServerChild {
     }
 }
 
+/// Best-effort teardown for `mcp --daemon` tests: on drop, runs `rqmd mcp stop`
+/// (which kills the detached daemon child and removes its PID file). The daemon
+/// is a *detached* process not tracked by any `Child` handle, so a child-kill
+/// guard cannot reach it — `mcp stop` (reading the PID file) is the only handle.
+/// Mirrors qmd's `afterAll` PID-file cleanup (cli.test.ts:1630-1646).
+pub struct DaemonGuard {
+    pub cwd: PathBuf,
+    pub cache: PathBuf,
+    pub cfg: PathBuf,
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        let _ = spawn_cache(&self.cwd, &self.cache, &self.cfg, &["mcp", "stop"]);
+    }
+}
+
 /// Pick an ephemeral free TCP port by binding `:0` and immediately releasing it.
 /// (Small TOCTOU window before the server rebinds, acceptable for tests; mirrors
 /// qmd's random-port approach.)

@@ -428,12 +428,27 @@ pub struct PullArgs {
 
 #[derive(Debug, Args)]
 pub struct McpArgs {
+    /// Lifecycle verb: `stop` to stop a running HTTP daemon. Omit to start.
+    #[arg(value_enum)]
+    pub action: Option<McpAction>,
     /// Use HTTP transport instead of stdio.
     #[arg(long)]
     pub http: bool,
     /// HTTP port (default 8181).
     #[arg(long)]
     pub port: Option<u16>,
+    /// Run the HTTP server in the background (writes a PID file under the cache
+    /// dir). Implies `--http`.
+    #[arg(long)]
+    pub daemon: bool,
+}
+
+/// Lifecycle verb for `rqmd mcp <action>`. A restricted enum (rather than a raw
+/// string) so unknown verbs produce a clap "invalid value" error.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum McpAction {
+    /// Stop a running MCP HTTP daemon (kills the PID file's process).
+    Stop,
 }
 
 // ============================================================================

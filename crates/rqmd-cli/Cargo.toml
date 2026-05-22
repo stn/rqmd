@@ -28,6 +28,19 @@ indexmap   = { workspace = true }
 # `.await`). `time` feature is needed by tokio internals used during pull
 # (spawn_blocking) and embed (session timers).
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+# Cross-platform process liveness + kill for the `mcp --daemon` / `mcp stop`
+# lifecycle (Windows has no fork/SIGTERM; sysinfo abstracts OpenProcess/
+# TerminateProcess vs libc::kill). Only the `system` feature is needed.
+sysinfo    = { version = "0.33", default-features = false, features = ["system"] }
+
+[target.'cfg(windows)'.dependencies]
+# `mcp --daemon` re-spawns a detached server. On Windows, CreateProcess with
+# bInheritHandles=TRUE inherits *all* inheritable handles, including the parent's
+# captured stdout/stderr pipes (e.g. under a test's `.output()`), which would
+# keep those pipes open in the daemon and hang the launcher. We clear the inherit
+# flag on the std handles before spawning (SetHandleInformation). Unix is immune
+# (fds are CLOEXEC + redirected individually).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
 # `collection_filter` unit tests build a YAML-backed `Config` on a temp path.

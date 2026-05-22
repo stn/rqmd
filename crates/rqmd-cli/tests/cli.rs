@@ -1571,3 +1571,201 @@ mod cli_mcp_http {
         );
     }
 }
+
+// ===========================================================================
+// MCP HTTP daemon lifecycle (`mcp --http --daemon`, `mcp stop`)
+// ===========================================================================
+//
+// Port of qmd's "mcp http daemon" cases (cli.test.ts:1738-1847). The detached
+// daemon is killed via `mcp stop` (a `DaemonGuard` does this on drop, since the
+// child is not tracked by any handle). PID/log live at `<RQMD_CACHE_DIR>/mcp.*`.
+mod cli_mcp_daemon {
+    use crate::common::*;
+    use std::time::Duration;
+
+    /// Seed a collection under `idx` in `cache`, returning nothing — callers
+    /// reuse the same `cache`/`cfg` for the daemon so the store matches.
+    fn seed(e: &Env, cache: &std::path::Path, idx: &str) {
+        spawn_cache(
+            &e.fixtures,
+            cache,
+            &e.config_dir,
+            &[
+                "--index",
+                idx,
+                "collection",
+                "add",
+                ".",
+                "--name",
+                "fixtures",
+            ],
+        )
+        .assert_ok();
+    }
+
+    #[test]
+    fn daemon_writes_pid_file_and_serves() {
+        let e = env();
+        let cache = tempfile::tempdir().expect("cache");
+        let idx = "daemon-serves";
+        seed(&e, cache.path(), idx);
+        let _guard = DaemonGuard {
+            cwd: e.fixtures.clone(),
+            cache: cache.path().to_path_buf(),
+            cfg: e.config_dir.clone(),
+        };
+
+        let port = free_port();
+        let port_s = port.to_string();
+        let out = spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &[
+                "--index", idx, "mcp", "--http", "--daemon", "--port", &port_s,
+            ],
+        );
+        out.assert_ok();
+        assert!(
+            out.stdout.contains(&format!("http://localhost:{port}/mcp")),
+            "stdout: {}",
+            out.stdout
+        );
+
+        let pid_file = cache.path().join("mcp.pid");
+        assert!(
+            pid_file.exists(),
+            "PID file missing: {}",
+            pid_file.display()
+        );
+        assert!(
+            wait_for_health(port, Duration::from_secs(15)).is_some(),
+            "daemon did not become healthy"
+        );
+    }
+
+    #[test]
+    fn stop_kills_daemon_and_removes_pid_file() {
+        let e = env();
+        let cache = tempfile::tempdir().expect("cache");
+        let idx = "daemon-stop";
+        seed(&e, cache.path(), idx);
+        let _guard = DaemonGuard {
+            cwd: e.fixtures.clone(),
+            cache: cache.path().to_path_buf(),
+            cfg: e.config_dir.clone(),
+        };
+
+        let port = free_port();
+        let port_s = port.to_string();
+        spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &[
+                "--index", idx, "mcp", "--http", "--daemon", "--port", &port_s,
+            ],
+        )
+        .assert_ok();
+        wait_for_health(port, Duration::from_secs(15)).expect("daemon health");
+
+        let pid_file = cache.path().join("mcp.pid");
+        let stop = spawn_cache(&e.fixtures, cache.path(), &e.config_dir, &["mcp", "stop"]);
+        stop.assert_ok();
+        assert!(stop.stdout.contains("Stopped"), "stdout: {}", stop.stdout);
+        assert!(!pid_file.exists(), "PID file should be removed");
+    }
+
+    #[test]
+    fn stop_handles_dead_pid_as_stale() {
+        let e = env();
+        let cache = tempfile::tempdir().expect("cache");
+        let pid_file = cache.path().join("mcp.pid");
+        std::fs::write(&pid_file, "999999999").unwrap();
+
+        let out = spawn_cache(&e.fixtures, cache.path(), &e.config_dir, &["mcp", "stop"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("stale"), "stdout: {}", out.stdout);
+        assert!(!pid_file.exists(), "stale PID file should be removed");
+    }
+
+    #[test]
+    fn daemon_rejects_when_already_running() {
+        let e = env();
+        let cache = tempfile::tempdir().expect("cache");
+        let idx = "daemon-dup";
+        seed(&e, cache.path(), idx);
+        let _guard = DaemonGuard {
+            cwd: e.fixtures.clone(),
+            cache: cache.path().to_path_buf(),
+            cfg: e.config_dir.clone(),
+        };
+
+        let port = free_port();
+        let port_s = port.to_string();
+        spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &[
+                "--index", idx, "mcp", "--http", "--daemon", "--port", &port_s,
+            ],
+        )
+        .assert_ok();
+        wait_for_health(port, Duration::from_secs(15)).expect("daemon health");
+
+        let port2 = free_port().to_string();
+        let second = spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &[
+                "--index", idx, "mcp", "--http", "--daemon", "--port", &port2,
+            ],
+        );
+        second.assert_code(1);
+        assert!(
+            second.stderr.contains("Already running"),
+            "stderr: {}",
+            second.stderr
+        );
+    }
+
+    #[test]
+    fn daemon_cleans_stale_pid_and_starts_fresh() {
+        let e = env();
+        let cache = tempfile::tempdir().expect("cache");
+        let idx = "daemon-stale";
+        seed(&e, cache.path(), idx);
+        let pid_file = cache.path().join("mcp.pid");
+        std::fs::write(&pid_file, "999999999").unwrap();
+        let _guard = DaemonGuard {
+            cwd: e.fixtures.clone(),
+            cache: cache.path().to_path_buf(),
+            cfg: e.config_dir.clone(),
+        };
+
+        let port = free_port();
+        let port_s = port.to_string();
+        let out = spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &[
+                "--index", idx, "mcp", "--http", "--daemon", "--port", &port_s,
+            ],
+        );
+        out.assert_ok();
+        assert!(
+            out.stdout.contains(&format!("http://localhost:{port}/mcp")),
+            "stdout: {}",
+            out.stdout
+        );
+        let new_pid = std::fs::read_to_string(&pid_file).unwrap();
+        assert_ne!(new_pid.trim(), "999999999", "stale PID should be replaced");
+        assert!(
+            wait_for_health(port, Duration::from_secs(15)).is_some(),
+            "fresh daemon did not become healthy"
+        );
+    }
+}
