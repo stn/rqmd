@@ -37,6 +37,12 @@ tempfile   = { workspace = true }
 # the Rust port of qmd's `test/cli.test.ts`. `serde_json` (a normal dependency
 # above) is reused in the tests for JSON-format assertions.
 assert_cmd = "2"
+# `tests/mcp_stdio.rs` drives a real `rqmd mcp` child over its stdin/stdout with
+# an rmcp client. `transport-child-process` provides `TokioChildProcess` and
+# enables `tokio/process` (unified into the crate's `tokio` for the test build);
+# `#[tokio::test]` itself relies on the `rt-multi-thread` + `macros` already
+# enabled on the normal `tokio` dependency above, so no dev `tokio` entry needed.
+rmcp       = { version = "1.7", default-features = false, features = ["client", "transport-child-process"] }
 
 [features]
 # GPU backends re-exported from rqmd-core so users can invoke `cargo build -p

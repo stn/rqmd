@@ -49,9 +49,18 @@ tokio = { version = "1", features = [
 ] }
 
 [dev-dependencies]
-# Integration tests drive the server with an in-process rmcp client over a duplex
-# stream; `client` pulls in the client half. `tempfile` seeds a throwaway index.
-rmcp     = { version = "1.7", default-features = false, features = ["client", "transport-io"] }
+# Integration tests drive the server two ways: an in-process rmcp client over a
+# duplex stream (`transport-io`), and a real end-to-end client over an ephemeral
+# TCP port hitting the `/mcp` Streamable HTTP endpoint
+# (`transport-streamable-http-client-reqwest`). The `-reqwest` variant is required
+# for `StreamableHttpClientTransport::from_uri` (the bare
+# `transport-streamable-http-client` only exposes bring-your-own-client ctors).
+# `client` pulls in the client half; `tempfile` seeds a throwaway index.
+rmcp     = { version = "1.7", default-features = false, features = [
+    "client",
+    "transport-io",
+    "transport-streamable-http-client-reqwest",
+] }
 tempfile = { workspace = true }
 tokio    = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 # HTTP layer is tested in-process via `ServiceExt::oneshot` on the axum Router —

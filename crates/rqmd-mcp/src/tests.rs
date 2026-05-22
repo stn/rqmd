@@ -1,10 +1,14 @@
 //! Integration tests: drive the MCP server end-to-end.
 //!
-//! The stdio test wires an in-process `rmcp` client to [`QmdMcpServer`] over a
-//! `tokio::io::duplex` pair and asserts the qmd parity points (server name,
-//! tool list, resource template, and the absolute-line snippet from
-//! `tobi/qmd/test/mcp.test.ts:1094-1117`). The HTTP test exercises the axum
-//! router via `tower`'s `oneshot` (no sockets/TLS).
+//! Three flavours: (1) `stdio_protocol_roundtrip` wires an in-process `rmcp`
+//! client to [`QmdMcpServer`] over a `tokio::io::duplex` pair; (2)
+//! `http_health_query_and_404` exercises the axum router via `tower`'s `oneshot`
+//! (no sockets/TLS); (3) `http_mcp_streamable_roundtrip` runs the *real* `/mcp`
+//! Streamable HTTP endpoint over an ephemeral TCP port with rmcp's HTTP client —
+//! the closest port of qmd's "MCP HTTP Transport" block. All three assert the
+//! qmd parity points (server name, tool list, and the absolute-line snippet from
+//! `tobi/qmd/test/mcp.test.ts:1094-1117`). The matching real-stdio roundtrip
+//! against the spawned `rqmd mcp` binary lives in `rqmd-cli/tests/mcp_stdio.rs`.
 //!
 //! All assertions here are LLM-free: `status`/`get`/`read_resource` are pure
 //! SQL, and the `query` cases use `lex` sub-queries with `rerank: false`, which
@@ -245,4 +249,89 @@ async fn http_health_query_and_404() {
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["error"], "Missing required field: searches (array)");
+}
+
+/// End-to-end over the *real* `/mcp` Streamable HTTP endpoint: bind an ephemeral
+/// TCP port, run `axum::serve`, and drive it with rmcp's HTTP client transport
+/// (sessions + SSE framing — no in-process shortcut). Ports qmd's "MCP HTTP
+/// Transport" block (`tobi/qmd/test/mcp.test.ts:1023-1117`), adapted: the server
+/// identifies as `rqmd` (not `qmd`) and the framing is SSE rather than direct
+/// JSON (transparent to a compliant client).
+#[tokio::test(flavor = "multi_thread")]
+async fn http_mcp_streamable_roundtrip() {
+    use rmcp::serve_client;
+    use rmcp::transport::StreamableHttpClientTransport;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let server = QmdMcpServer::new(seed_store(tmp.path()).await);
+    let app = crate::http::router(server);
+
+    // Bind before spawning so the OS accept queue exists before the client
+    // connects — no connect race even if the serve task hasn't been polled yet.
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_task = tokio::spawn(async move {
+        // Runs until the test aborts the task; ignore the result so an abort at
+        // an await point can't surface as a spurious panic.
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let transport = StreamableHttpClientTransport::from_uri(format!("http://{addr}/mcp"));
+    let client = serve_client((), transport).await.expect("client connected");
+
+    // --- initialize: server identity is `rqmd` (divergence from qmd's `qmd`) ---
+    let info = client.peer_info().expect("peer info");
+    assert_eq!(info.server_info.name, "rqmd");
+
+    // --- tools/list ⊇ {query, get, multi_get, status} ---
+    let tools = client.list_all_tools().await.expect("list tools");
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+    for expected in ["query", "get", "multi_get", "status"] {
+        assert!(names.contains(&expected), "missing tool {expected}");
+    }
+
+    // --- status (pure SQL) ---
+    let status = client.call_tool(call("status", json!({}))).await.expect("status");
+    let sc = status.structured_content.expect("status structuredContent");
+    assert!(sc["totalDocuments"].as_i64().unwrap() >= 5);
+
+    // --- get (pure SQL): a single resource block with the document body ---
+    let got = client
+        .call_tool(call("get", json!({ "file": "readme.md" })))
+        .await
+        .expect("get");
+    assert_eq!(got.is_error, Some(false));
+    let block = serde_json::to_value(&got.content[0]).unwrap();
+    assert_eq!(block["type"], "resource");
+    assert!(
+        block["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Project README")
+    );
+
+    // --- query (lex + rerank:false): absolute source line, not chunk-local ---
+    let q = client
+        .call_tool(call(
+            "query",
+            json!({ "searches": [{ "type": "lex", "query": "UNIQUE_KEYWORD_XYZ" }], "rerank": false }),
+        ))
+        .await
+        .expect("query");
+    let results = q.structured_content.expect("query structuredContent");
+    let results = results["results"].as_array().expect("results array");
+    let hit = results
+        .iter()
+        .find(|r| r["file"] == "docs/absolute-line-fixture.md")
+        .expect("absolute-line hit");
+    assert_eq!(hit["line"], 301);
+    let first_line = hit["snippet"].as_str().unwrap().lines().next().unwrap();
+    // Mirrors qmd's /^\d+: @@ -3\d\d,/ — line-numbered diff-style snippet header.
+    assert!(
+        first_line.contains(": @@ -3"),
+        "unexpected snippet header: {first_line}"
+    );
+
+    client.cancel().await.ok();
+    server_task.abort();
 }
