@@ -3,11 +3,14 @@
 //! Each test spawns the built `rqmd` binary against an isolated temp index +
 //! config (see `common`), mirroring qmd's `runQmd()` process-spawn approach.
 //!
-//! Scope: the portable subset of `cli.test.ts`. Out of scope because the
-//! feature is absent in rqmd (declared in `src/cli.rs`): the `skill`/`skills`
-//! commands, the editor-URI/`termLink` helpers, and the `mcp` daemon/stdio
-//! suites. A handful of qmd tests are dropped where rqmd's behaviour
-//! deliberately differs (noted at each call site).
+//! Scope: a near-complete port of `cli.test.ts`. The editor-URI / `termLink`
+//! helpers are implemented in `search_view.rs` and unit-tested there, so they
+//! are not re-asserted here. Genuinely out of scope: qmd's MCP *stdio launcher*
+//! test (a Node/bash wrapper-script concern with no rqmd analogue) and its two
+//! absolute-path `ls` tests (on Windows the drive letter collides with `qmd://`
+//! collection-name parsing, and a hand-written-YAML collection is not synced
+//! into the DB registry `ls` reads). Deliberate behavioural divergences are
+//! kept and tested as rqmd's *actual* behaviour (noted at each call site).
 //!
 //! Where rqmd's wording / exit codes diverge from qmd, the assertions follow
 //! rqmd's actual output (clap parse errors exit 2; app errors exit 1; the
@@ -135,8 +138,23 @@ mod cli_status {
         out.assert_ok();
         assert!(out.stdout.contains("Collection"), "stdout: {}", out.stdout);
     }
-    // qmd's "shows device mode" test is dropped: rqmd's status has no
-    // device-probe section (status.rs prints "device probe not yet implemented").
+    #[test]
+    fn shows_device_mode_without_native_probing_by_default() {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        let out = e.run(&["status"]);
+        out.assert_ok();
+        // qmd parity: the default (no-probe) path prints a Device/Mode section
+        // and tells the user how to opt into the native probe.
+        assert!(out.stdout.contains("Device"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("Mode:"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("not probed"), "stdout: {}", out.stdout);
+        assert!(
+            out.stdout.contains("QMD_STATUS_DEVICE_PROBE=1"),
+            "stdout: {}",
+            out.stdout
+        );
+    }
 }
 
 // ===========================================================================
@@ -263,8 +281,21 @@ mod cli_search {
         assert_eq!(files.stdout.trim(), "");
     }
 
-    // qmd's "requires query argument" is dropped: rqmd treats an empty query
-    // as a no-match (exit 0, `[]`), it does not error.
+    // Divergence (tested, not dropped): qmd's `search` errors on a missing
+    // query argument (exit 1, "Usage:"); rqmd deliberately treats an empty
+    // query as a no-match so `rqmd search "$VAR" --json` with an empty $VAR
+    // yields `[]` rather than erroring (search.rs documents this).
+    #[test]
+    fn empty_query_is_no_match_not_error() {
+        let e = seeded();
+        let out = e.run(&["search"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("No results"), "stdout: {}", out.stdout);
+
+        let json = e.run(&["search", "--json"]);
+        json.assert_ok();
+        assert_eq!(json.stdout.trim(), "[]");
+    }
 
     #[test]
     fn json_full_includes_line_field() {
@@ -315,8 +346,15 @@ mod cli_get {
         out.assert_code(1);
     }
 
-    // qmd's "clamps negative --from" is dropped: rqmd's `--from` is unsigned,
-    // so `--from -19` is a clap parse error rather than a clamp.
+    // Divergence (tested, not dropped): qmd clamps a negative `--from` to the
+    // top of the file; rqmd types `--from` as `Option<usize>`, so `--from -19`
+    // is a clap parse error (exit 2) rather than a clamp.
+    #[test]
+    fn rejects_negative_from() {
+        let e = seeded();
+        let out = e.run(&["get", "README.md", "--from", "-19"]);
+        out.assert_err();
+    }
 }
 
 // ===========================================================================
@@ -1185,9 +1223,16 @@ mod get_path_normalization {
         assert!(out.stdout.contains("Test Document 1"));
     }
 
-    // qmd's "qmd:////collection/path (extra slashes)" get test is dropped:
-    // rqmd's `get` resolver normalizes `qmd://` and `//` but not the
-    // 4-slash `qmd:////` form (it reports "Document not found").
+    // Previously dropped on the assumption rqmd couldn't normalize the 4-slash
+    // form — but it can, so port qmd's original test verbatim: `qmd:////` is
+    // normalized like `qmd://`/`//` and returns the document.
+    #[test]
+    fn get_with_quadruple_slash_path() {
+        let e = seeded();
+        let out = e.run(&["get", "qmd:////fixtures/test1.md", "-l", "3"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Test Document 1"));
+    }
 
     #[test]
     fn get_with_path_line_suffix() {

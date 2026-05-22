@@ -1,7 +1,8 @@
 //! `rqmd status` — index + collection health summary.
 //!
-//! Maps to qmd's `qmd status` in `src/cli/qmd.ts` (lines 393–628). The AST /
-//! Models / Device sections are not yet printed by this command.
+//! Maps to qmd's `qmd status` in `src/cli/qmd.ts` (lines 393–628). The native
+//! device probe behind `QMD_STATUS_DEVICE_PROBE=1` is best-effort (see
+//! [`device_mode`]).
 
 use anyhow::Result;
 use rqmd_core::store::context::list_collections;
@@ -148,11 +149,28 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         }
     }
 
-    println!(
-        "\n{}Models / device probe not yet implemented in this CLI.{}",
-        p.dim(),
-        p.reset()
-    );
+    // Device / Mode section (qmd.ts:551-590). The native probe behind
+    // `QMD_STATUS_DEVICE_PROBE=1` is opt-in because, on machines with a broken
+    // GPU loader, probing can abort the process; the default path only reports
+    // the configured mode.
+    println!("\n{}Device{}", p.bold(), p.reset());
+    println!("  Mode:     {}", device_mode());
+    if std::env::var("QMD_STATUS_DEVICE_PROBE").as_deref() == Ok("1") {
+        println!("  Status:   probing native llama backend...");
+        // Real GPU/VRAM enumeration is not yet wired through the llama.cpp
+        // bindings; report gracefully rather than aborting.
+        println!(
+            "  Status:   {}device probe not yet implemented{}",
+            p.dim(),
+            p.reset()
+        );
+    } else {
+        println!(
+            "  Status:   {}not probed{} (set QMD_STATUS_DEVICE_PROBE=1 to test GPU/CPU backend)",
+            p.dim(),
+            p.reset()
+        );
+    }
 
     // Tips section.
     let collections_without_context: Vec<String> = collections
@@ -211,4 +229,28 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Configured device mode for the status `Device` section. Mirrors qmd's
+/// `configuredGpuMode` (`qmd.ts:553-557`): `CPU forced` when `QMD_FORCE_CPU` is
+/// set to a truthy value (rqmd's global `--no-gpu` sets `QMD_FORCE_CPU=1`), else
+/// the explicit `QMD_LLAMA_GPU` value, else `auto`.
+fn device_mode() -> String {
+    if let Ok(v) = std::env::var("QMD_FORCE_CPU") {
+        let t = v.trim().to_ascii_lowercase();
+        let falsey = matches!(
+            t.as_str(),
+            "false" | "off" | "none" | "disable" | "disabled" | "0"
+        );
+        if !t.is_empty() && !falsey {
+            return "CPU forced (QMD_FORCE_CPU)".to_string();
+        }
+    }
+    if let Ok(v) = std::env::var("QMD_LLAMA_GPU") {
+        let t = v.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    "auto".to_string()
 }

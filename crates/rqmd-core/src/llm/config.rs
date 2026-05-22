@@ -196,3 +196,101 @@ fn resolve_context_size_env(var: &'static str, default: usize) -> usize {
         }
     }
 }
+
+// =============================================================================
+// Unit tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    //! Port of qmd's `test/cli.test.ts` "CLI Embed" resolution cases
+    //! (`prefers QMD_EMBED_MODEL`, `falls back to the default embed model`).
+    //! These are pure resolution unit tests in qmd too — the resolved URI is
+    //! never printed by any rqmd command, so they cannot be e2e (process-spawn)
+    //! tests here. Extended to all three model slots.
+
+    use super::*;
+    use crate::llm::types::ModelResolutionConfig;
+    use serial_test::serial;
+
+    /// Model-resolution env vars consulted by `resolve_with_env`. Snapshotted
+    /// and restored wholesale so env-mutating tests (all `#[serial]`) cannot
+    /// leak state — mirrors the `EnvGuard` pattern in `store::path::tests`.
+    /// `set_var`/`remove_var` are `unsafe` since Rust 2024; pair with
+    /// `#[serial]` so no other test reads these vars concurrently.
+    const ENV_KEYS: &[&str] = &["QMD_EMBED_MODEL", "QMD_GENERATE_MODEL", "QMD_RERANK_MODEL"];
+
+    struct EnvGuard(Vec<(&'static str, Option<String>)>);
+
+    impl EnvGuard {
+        fn new() -> Self {
+            EnvGuard(
+                ENV_KEYS
+                    .iter()
+                    .map(|k| (*k, std::env::var(k).ok()))
+                    .collect(),
+            )
+        }
+        fn set(&self, k: &str, v: &str) {
+            unsafe { std::env::set_var(k, v) };
+        }
+        fn unset(&self, k: &str) {
+            unsafe { std::env::remove_var(k) };
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.0 {
+                unsafe {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn prefers_env_qmd_embed_model_over_default() {
+        let g = EnvGuard::new();
+        g.set("QMD_EMBED_MODEL", "hf:env/embed-model.gguf");
+        assert_eq!(resolve_embed_model(None), "hf:env/embed-model.gguf");
+    }
+
+    #[test]
+    #[serial]
+    fn falls_back_to_default_embed_model_when_unset() {
+        let g = EnvGuard::new();
+        g.unset("QMD_EMBED_MODEL");
+        assert_eq!(resolve_embed_model(None), DEFAULT_EMBED_MODEL);
+    }
+
+    #[test]
+    #[serial]
+    fn config_value_takes_priority_over_env_and_default() {
+        let g = EnvGuard::new();
+        g.set("QMD_EMBED_MODEL", "hf:env/embed-model.gguf");
+        let cfg = ModelResolutionConfig {
+            embed: Some("hf:config/embed-model.gguf".to_string()),
+            generate: None,
+            rerank: None,
+        };
+        assert_eq!(
+            resolve_embed_model(Some(&cfg)),
+            "hf:config/embed-model.gguf"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn generate_and_rerank_resolve_env_then_default() {
+        let g = EnvGuard::new();
+        g.set("QMD_GENERATE_MODEL", "hf:env/generate.gguf");
+        g.unset("QMD_RERANK_MODEL");
+        assert_eq!(resolve_generate_model(None), "hf:env/generate.gguf");
+        assert_eq!(resolve_rerank_model(None), DEFAULT_RERANK_MODEL);
+    }
+}
