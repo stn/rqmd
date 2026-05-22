@@ -43,6 +43,29 @@ async fn run() -> Result<()> {
     }
 
     let palette = color::Palette::new(args.no_color);
+
+    // `--skill` alias: print the bundled skill and exit (no index/store needed).
+    // Checked before the missing-subcommand handling below so `rqmd --skill`
+    // (which intentionally takes no subcommand) works.
+    if args.skill {
+        commands::skill::show(&palette);
+        return Ok(());
+    }
+
+    // `command` is `Option` so the `--skill` alias can run with no subcommand.
+    // A bare `rqmd` (no subcommand, no `--skill`) reproduces clap's own
+    // missing-subcommand usage error (stderr, exit 2) — matching the prior
+    // behaviour when `command` was required.
+    let Some(command) = args.command else {
+        use clap::CommandFactory;
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::MissingSubcommand,
+                "a subcommand is required",
+            )
+            .exit();
+    };
+
     let mut state = IndexState::new(args.index.as_deref());
 
     // Bind the dispatch result so we can dispose the LLM workers *after* the
@@ -50,7 +73,7 @@ async fn run() -> Result<()> {
     // ends), regardless of Ok/Err. `state.close(self)` consumes `self`, so it
     // must come after the match. Panics still skip `close` — same as pre-PR
     // behaviour; the OS reclaims worker threads on process exit.
-    let result: Result<()> = match args.command {
+    let result: Result<()> = match command {
         Command::Collection(sub) => commands::collection::run(sub, &mut state, &palette),
         Command::Context(sub) => commands::context::run(sub, &mut state, &palette),
         Command::Get(a) => commands::get::run(a, &mut state, &palette),
@@ -68,6 +91,8 @@ async fn run() -> Result<()> {
         Command::Bench(a) => commands::bench::run(a, &mut state).await,
 
         Command::Mcp(a) => commands::mcp::run(a, &mut state).await,
+        Command::Skill(sub) => commands::skill::run_skill(sub, &palette),
+        Command::Skills(sub) => commands::skill::run_skills(sub, &palette),
     };
     state.close().await;
     result

@@ -10,8 +10,7 @@ use rqmd_core::store::chunking::ChunkStrategy;
 #[command(
     name = "rqmd",
     version,
-    about = "On-device hybrid search for markdown (Rust port of tobi/qmd)",
-    after_help = "Note: skill and skills commands from qmd are not yet implemented in rqmd."
+    about = "On-device hybrid search for markdown (Rust port of tobi/qmd)"
 )]
 pub struct Cli {
     /// Use a named index (default: "index"). Selects `<name>.sqlite` under the
@@ -28,8 +27,15 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_color: bool,
 
+    /// Print the bundled rqmd skill and exit (alias for `skill show`).
+    #[arg(long)]
+    pub skill: bool,
+
+    /// `None` enables the `--skill` alias (which takes no subcommand); a missing
+    /// subcommand without `--skill` is handled in `main` to reproduce clap's
+    /// "missing subcommand" usage error (exit 2).
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -81,6 +87,77 @@ pub enum Command {
 
     /// Start the MCP (Model Context Protocol) server (stdio, or `--http`).
     Mcp(McpArgs),
+
+    /// Show or install the bundled rqmd skill (legacy `show`/`install`).
+    #[command(subcommand)]
+    Skill(SkillCmd),
+
+    /// Inspect bundled runtime skills (`list`/`get`/`path`).
+    #[command(subcommand)]
+    Skills(SkillsCmd),
+}
+
+// ============================================================================
+// skill / skills
+// ============================================================================
+
+#[derive(Debug, Subcommand)]
+pub enum SkillCmd {
+    /// Print the bundled rqmd skill.
+    Show,
+    /// Install the rqmd skill into a project (or `--global` into $HOME).
+    Install(SkillInstallArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SkillInstallArgs {
+    /// Install into `$HOME/.agents/skills/rqmd` instead of `./.agents/skills/rqmd`.
+    #[arg(long)]
+    pub global: bool,
+    /// Also create the `.claude/skills/rqmd` symlink without prompting.
+    #[arg(long)]
+    pub yes: bool,
+    /// Replace an existing install / symlink.
+    #[arg(short = 'f', long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SkillsCmd {
+    /// List bundled runtime skills.
+    List(SkillsListArgs),
+    /// Print a bundled runtime skill.
+    Get(SkillsGetArgs),
+    /// Print the on-disk path of a bundled runtime skill (or the search dir).
+    Path(SkillsPathArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsListArgs {
+    /// Emit structured JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsGetArgs {
+    /// Skill name (rqmd ships a single skill: `rqmd`).
+    pub name: Option<String>,
+    /// Include references/templates/scripts.
+    #[arg(long)]
+    pub full: bool,
+    /// Print all bundled skills.
+    #[arg(long)]
+    pub all: bool,
+    /// Emit structured JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsPathArgs {
+    /// Skill name; omit to print the skills search directory.
+    pub name: Option<String>,
 }
 
 // ============================================================================

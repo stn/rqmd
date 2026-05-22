@@ -12,6 +12,7 @@ pub mod multi_get;
 pub mod pull;
 pub mod query;
 pub mod search;
+pub mod skill;
 pub mod status;
 pub mod update;
 pub mod vsearch;

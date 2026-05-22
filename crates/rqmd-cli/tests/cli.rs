@@ -49,6 +49,186 @@ mod cli_help {
 }
 
 // ===========================================================================
+// CLI Skills (bundled runtime skill — `skills list/get/path`)
+// ===========================================================================
+mod cli_skills {
+    use crate::common::*;
+
+    #[test]
+    fn lists_bundled_runtime_skills() {
+        let e = env();
+        let out = e.run_bare(&["skills", "list"]);
+        out.assert_ok();
+        assert_eq!(out.stderr, "", "stderr: {}", out.stderr);
+        assert!(out.stdout.contains("rqmd"), "stdout: {}", out.stdout);
+        assert!(
+            out.stdout.contains("Search local markdown knowledge bases"),
+            "stdout: {}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn gets_runtime_skill_content() {
+        let e = env();
+        let out = e.run_bare(&["skills", "get", "rqmd"]);
+        out.assert_ok();
+        // rqmd identity strings (sanctioned parity exception): em-dash H1.
+        assert!(
+            out.stdout.contains("# rqmd — Query Markdown Documents"),
+            "stdout: {}",
+            out.stdout
+        );
+        assert!(out.stdout.contains("## MCP Tool: `query`"));
+        assert!(!out.stdout.contains("discovery stub"));
+    }
+
+    #[test]
+    fn gets_runtime_skill_with_references() {
+        let e = env();
+        let out = e.run_bare(&["skills", "get", "rqmd", "--full"]);
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("--- references/mcp-setup.md ---"),
+            "stdout: {}",
+            out.stdout
+        );
+        assert!(out.stdout.contains("# rqmd MCP Server Setup"));
+    }
+
+    #[test]
+    fn prints_canonical_skill_path() {
+        let e = env();
+        let out = e.run_bare(&["skills", "path", "rqmd"]);
+        out.assert_ok();
+        assert_eq!(out.stderr, "", "stderr: {}", out.stderr);
+        let p = out.stdout.trim().replace('\\', "/");
+        assert!(p.ends_with("skills/rqmd"), "path: {p}");
+    }
+}
+
+// ===========================================================================
+// CLI Skill (legacy `skill show/install` + `--skill` alias)
+// ===========================================================================
+mod cli_skill {
+    use crate::common::*;
+
+    #[test]
+    fn shows_skill_with_skill_alias() {
+        let e = env();
+        let out = e.run_bare(&["--skill"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("rqmd Skill"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("name: rqmd"));
+        assert!(
+            out.stdout
+                .contains("allowed-tools: Bash(rqmd:*), mcp__rqmd__*")
+        );
+    }
+
+    #[test]
+    fn legacy_skill_show_prints_canonical_skill() {
+        let e = env();
+        let out = e.run_bare(&["skill", "show"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("# rqmd — Query Markdown Documents"));
+        assert!(out.stdout.contains("## MCP Tool: `query`"));
+        assert!(!out.stdout.contains("discovery stub"));
+    }
+
+    #[test]
+    fn shows_skill_help() {
+        let e = env();
+        // clap renders `skill -h` with a Commands list (show/install); qmd's
+        // exact "Usage: qmd skill <show|install>" wording has no rqmd analogue.
+        let out = e.run_bare(&["skill", "-h"]);
+        out.assert_ok();
+        assert!(out.stdout.contains("Usage:"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("install"));
+        assert!(out.stdout.contains("show"));
+    }
+
+    #[test]
+    fn installs_into_the_current_project() {
+        let e = env();
+        let proj = e.root.join("skill-project");
+        std::fs::create_dir_all(&proj).unwrap();
+        let out = e.run_in(&proj, &["skill", "install"]);
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("Installed rqmd skill"),
+            "stdout: {}",
+            out.stdout
+        );
+        let installed = proj
+            .join(".agents")
+            .join("skills")
+            .join("rqmd")
+            .join("SKILL.md");
+        assert!(installed.is_file(), "missing {}", installed.display());
+        let body = std::fs::read_to_string(&installed).unwrap();
+        assert!(body.contains("# rqmd — Query Markdown Documents"));
+    }
+
+    #[test]
+    fn refuses_to_overwrite_without_force() {
+        let e = env();
+        let proj = e.root.join("skill-project-force");
+        std::fs::create_dir_all(&proj).unwrap();
+        e.run_in(&proj, &["skill", "install"]).assert_ok();
+
+        let second = e.run_in(&proj, &["skill", "install"]);
+        second.assert_code(1);
+        assert!(
+            second.stderr.contains("Skill already exists"),
+            "stderr: {}",
+            second.stderr
+        );
+        assert!(
+            second.stderr.contains("--force"),
+            "stderr: {}",
+            second.stderr
+        );
+    }
+
+    // The `--global --yes` path creates a directory symlink, which on Windows
+    // requires Developer Mode / admin; gate it to Unix (the project install
+    // above exercises the cross-platform path). Mirrors the documented
+    // platform constraint on the `ls` absolute-path tests.
+    #[cfg(unix)]
+    #[test]
+    fn installs_globally_and_creates_claude_symlink_with_yes() {
+        let e = env();
+        let fake_home = e.root.join("skill-home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let out = e.run_env(
+            &["skill", "install", "--global", "--yes"],
+            &[("HOME", fake_home.to_str().unwrap())],
+        );
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("Linked Claude skill at"),
+            "stdout: {}",
+            out.stdout
+        );
+
+        let skill_dir = fake_home.join(".agents").join("skills").join("rqmd");
+        assert!(skill_dir.join("SKILL.md").is_file());
+
+        let link = fake_home.join(".claude").join("skills").join("rqmd");
+        let meta = std::fs::symlink_metadata(&link).expect("claude link");
+        assert!(
+            meta.file_type().is_symlink(),
+            "expected symlink at {}",
+            link.display()
+        );
+        // Reading through the link resolves to the installed SKILL.md.
+        let via_link = std::fs::read_to_string(link.join("SKILL.md")).unwrap();
+        assert!(via_link.contains("# rqmd — Query Markdown Documents"));
+    }
+}
+
+// ===========================================================================
 // CLI Embed (flag validation only — model-free, fails before any load)
 // ===========================================================================
 mod cli_embed {
