@@ -200,13 +200,33 @@ fn ensure_symlink(target: &Path, link: &Path, force: bool) -> Result<()> {
     if let Some(parent) = link.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if link.symlink_metadata().is_ok() {
+    if let Ok(meta) = link.symlink_metadata() {
         if !force {
             return Ok(());
         }
-        let _ = std::fs::remove_dir_all(link).or_else(|_| std::fs::remove_file(link));
+        remove_existing(link, &meta)?;
     }
     symlink_dir(target, link)
+}
+
+/// Remove whatever is at `link` so a fresh symlink can replace it. A symlink is
+/// removed *as a link* (never followed); a real directory/file is removed
+/// explicitly. This avoids `remove_dir_all` ever recursing into a real
+/// directory a user happened to place at the link path.
+fn remove_existing(link: &Path, meta: &std::fs::Metadata) -> Result<()> {
+    if meta.file_type().is_symlink() {
+        // Unix: a symlink (to dir or file) is removed with `remove_file`.
+        // Windows: a *directory* symlink must be removed with `remove_dir`.
+        #[cfg(windows)]
+        std::fs::remove_dir(link).or_else(|_| std::fs::remove_file(link))?;
+        #[cfg(not(windows))]
+        std::fs::remove_file(link)?;
+    } else if meta.is_dir() {
+        std::fs::remove_dir_all(link)?;
+    } else {
+        std::fs::remove_file(link)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

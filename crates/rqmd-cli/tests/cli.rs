@@ -335,6 +335,19 @@ mod cli_status {
             out.stdout
         );
     }
+
+    #[test]
+    fn shows_mcp_daemon_section() {
+        let e = env();
+        e.run(&["collection", "add", "."]).assert_ok();
+        let out = e.run(&["status"]);
+        out.assert_ok();
+        // qmd parity (qmd.ts:423-437): status reports MCP daemon health. No
+        // daemon runs in this isolated env, so it reads "not running".
+        assert!(out.stdout.contains("MCP"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("Daemon:"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("not running"), "stdout: {}", out.stdout);
+    }
 }
 
 // ===========================================================================

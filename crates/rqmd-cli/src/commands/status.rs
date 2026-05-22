@@ -172,6 +172,14 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         );
     }
 
+    // MCP daemon status (qmd.ts:423-437): report whether a background HTTP
+    // daemon is running (via its PID file under the cache dir).
+    println!("\n{}MCP{}", p.bold(), p.reset());
+    match crate::commands::mcp::running_daemon_pid() {
+        Some(pid) => println!("  Daemon:   running (PID {pid})"),
+        None => println!("  Daemon:   {}not running{}", p.dim(), p.reset()),
+    }
+
     // Tips section.
     let collections_without_context: Vec<String> = collections
         .iter()

@@ -35,7 +35,10 @@ pub async fn run(args: McpArgs, state: &mut IndexState) -> Result<()> {
     }
 
     if args.daemon {
-        // The daemon is HTTP-only; spawning is synchronous (no .await).
+        // `--daemon` implies HTTP and spawns synchronously (no .await).
+        // Deliberate divergence from qmd, where `--daemon` without `--http` falls
+        // through to stdio (silently ignoring `--daemon`); rqmd always
+        // backgrounds an HTTP server, the only sensible daemon mode.
         return start_daemon(&args, state);
     }
 
@@ -83,9 +86,12 @@ fn start_daemon(args: &McpArgs, state: &mut IndexState) -> Result<()> {
     if let Some(parent) = pid_file.parent() {
         fs::create_dir_all(parent).ok();
     }
+    // Truncate per run (qmd.ts:3686 opens with "w" — fresh log each start) so
+    // the log does not grow unbounded across daemon restarts.
     let log = fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(log_path())
         .context("opening mcp.log")?;
     let log_err = log.try_clone().context("cloning mcp.log handle")?;
@@ -142,6 +148,13 @@ fn read_pid(path: &Path) -> Option<u32> {
     fs::read_to_string(path).ok()?.trim().parse::<u32>().ok()
 }
 
+/// PID of a currently-running MCP HTTP daemon (per the PID file), or `None`.
+/// Used by `status` to report daemon health (qmd.ts:423-437).
+pub(crate) fn running_daemon_pid() -> Option<u32> {
+    let pid = read_pid(&pid_path())?;
+    is_alive(pid).then_some(pid)
+}
+
 /// Configure `cmd` to start the child detached from this process's session /
 /// console so it survives the parent exiting.
 #[cfg(windows)]
@@ -190,12 +203,14 @@ fn is_alive(pid: u32) -> bool {
     sys.process(Pid::from_u32(pid)).is_some()
 }
 
-/// Terminate `pid`. Returns false if the process was not found.
+/// Terminate `pid`. Returns false if the process was not found. Prefers SIGTERM
+/// so the daemon can shut down gracefully (matches qmd's `SIGTERM`); falls back
+/// to the default kill when the signal is unsupported (Windows → TerminateProcess).
 fn kill(pid: u32) -> bool {
-    use sysinfo::{Pid, System};
+    use sysinfo::{Pid, Signal, System};
     let sys = System::new_all();
     match sys.process(Pid::from_u32(pid)) {
-        Some(p) => p.kill(),
+        Some(p) => p.kill_with(Signal::Term).unwrap_or_else(|| p.kill()),
         None => false,
     }
 }
