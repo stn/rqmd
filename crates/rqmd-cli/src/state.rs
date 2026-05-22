@@ -11,9 +11,10 @@ use rqmd_core::collections::{find_local_config_path, local_db_path, sanitize_ind
 use rqmd_core::llm::config::{resolve_models, ResolvedModels};
 use rqmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rqmd_core::llm::types::ModelResolutionConfig;
+use rqmd_core::paths::config_file_path;
 use rqmd_core::store::path::{default_db_path, pwd};
 use rqmd_core::store::store_config::sync_config_to_db;
-use rqmd_core::{Llm, Store};
+use rqmd_core::{Llm, RqmdStoreOptions, Store};
 
 /// Holds the CLI's index selection plus the lazily-opened [`Store`],
 /// [`Config`], and [`LlamaCpp`] handle. One per `rqmd` invocation.
@@ -78,6 +79,28 @@ impl IndexState {
         }
         default_db_path(Some(&self.index_name))
             .context("resolving default index path (set RQMD_INDEX_PATH or use --index)")
+    }
+
+    /// Build [`RqmdStoreOptions`] for the active index. Used by `rqmd mcp`, which
+    /// drives the higher-level `RqmdStore` facade (the analog of qmd's
+    /// `createStore`) rather than the lazy `Store`/`Config`/`LlamaCpp` trio.
+    ///
+    /// `config_path` is set only when the file exists, mirroring qmd's
+    /// `existsSync(getConfigPath())` guard in `server.ts:558`. When absent, the
+    /// store runs DB-only: collections already synced into SQLite by earlier
+    /// `collection add` / `update` runs remain searchable.
+    pub fn rqmd_store_options(&self) -> Result<RqmdStoreOptions> {
+        let db_path = self.db_path()?;
+        let candidate = match &self.config_path_override {
+            Some(p) => p.clone(),
+            None => config_file_path(&self.index_name),
+        };
+        let config_path = candidate.is_file().then_some(candidate);
+        Ok(RqmdStoreOptions {
+            db_path,
+            config_path,
+            config: None,
+        })
     }
 
     /// Open the [`Store`] (lazy). Subsequent calls return the same handle.

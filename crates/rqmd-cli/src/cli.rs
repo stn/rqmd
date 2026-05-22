@@ -79,7 +79,7 @@ pub enum Command {
     /// Download the configured LLM models from HuggingFace.
     Pull(PullArgs),
 
-    /// Start the MCP server. **Requires rqmd-mcp (not yet implemented).**
+    /// Start the MCP (Model Context Protocol) server (stdio, or `--http`).
     Mcp(McpArgs),
 }
 

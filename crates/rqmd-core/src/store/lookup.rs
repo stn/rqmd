@@ -388,10 +388,13 @@ pub fn find_documents(
             docs.push(MultiGetResult::Skipped {
                 filepath: virtual_path,
                 display_path: row.display_path,
+                // Round to nearest KB to match qmd's `Math.round(bytes / 1024)`
+                // (store.ts:3960). `f64::round` rounds half away from zero, which
+                // equals JS `Math.round` for these non-negative byte counts.
                 skip_reason: format!(
                     "File too large ({}KB > {}KB)",
-                    row.body_length / 1024,
-                    options.max_bytes / 1024
+                    (row.body_length as f64 / 1024.0).round() as i64,
+                    (options.max_bytes as f64 / 1024.0).round() as i64
                 ),
             });
             continue;

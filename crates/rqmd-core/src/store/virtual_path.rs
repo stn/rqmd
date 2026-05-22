@@ -117,6 +117,17 @@ fn encode_uri_component(s: &str) -> String {
     out
 }
 
+/// Encode a path for use in `qmd://` URIs, mirroring qmd's `encodeQmdPath`
+/// (`src/mcp/server.ts:70-73`): percent-encode each `/`-delimited segment with
+/// `encodeURIComponent`, preserving the slashes for readability. Used by the MCP
+/// server when building resource URIs for `get` / `multi_get`.
+pub fn encode_qmd_path(path: &str) -> String {
+    path.split('/')
+        .map(encode_uri_component)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Quick membership check — does `s` look like a virtual path?
 pub fn is_virtual_path(s: &str) -> bool {
     let t = s.trim();
@@ -181,6 +192,20 @@ pub fn to_virtual_path(conn: &Connection, abs: &Path) -> Result<Option<String>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- encode_qmd_path (port of mcp.test.ts:818-825) ----
+
+    #[test]
+    fn encode_qmd_path_preserves_slashes_encodes_special_chars() {
+        assert_eq!(
+            encode_qmd_path("External Podcast/2023 April - Interview.md"),
+            "External%20Podcast/2023%20April%20-%20Interview.md"
+        );
+        // Plain path is unchanged.
+        assert_eq!(encode_qmd_path("docs/readme.md"), "docs/readme.md");
+        // No slash → single segment encoded.
+        assert_eq!(encode_qmd_path("a b.md"), "a%20b.md");
+    }
 
     // ---- normalize_virtual_path (port of store.test.ts:3590) ----
 

@@ -1,7 +1,7 @@
 //! `rqmd` — command-line interface.
 //!
 //! Maps to qmd's `src/cli/qmd.ts` (3828 lines). PR1 wired `pull` + `embed`;
-//! PR2 wires `search` + `vsearch` + `query`. Only `mcp` remains stubbed.
+//! PR2 wires `search` + `vsearch` + `query`; `mcp` is wired to `rqmd-mcp`.
 
 use anyhow::Result;
 use clap::Parser;
@@ -67,7 +67,7 @@ async fn run() -> Result<()> {
         Command::Query(a) => commands::query::run(a, &mut state, &palette).await,
         Command::Bench(a) => commands::bench::run(a, &mut state).await,
 
-        Command::Mcp(_) => commands::llm_stub::run("mcp"),
+        Command::Mcp(a) => commands::mcp::run(a, &mut state).await,
     };
     state.close().await;
     result

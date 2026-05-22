@@ -9,3 +9,51 @@ repository.workspace = true
 
 [dependencies]
 rqmd-core = { workspace = true }
+
+# Official MCP Rust SDK — analog of qmd's `@modelcontextprotocol/sdk`. We use a
+# manual `ServerHandler` (no `schemars`) so tool input schemas, descriptions,
+# annotations, and response shapes are hand-crafted to match qmd. Features:
+#   server                                  — ServerHandler + serve_server
+#   transport-io                            — stdio() transport (default mode)
+#   transport-streamable-http-server[-session] — HTTP /mcp + LocalSessionManager
+#   tower                                   — mount the HTTP service in axum
+rmcp = { version = "1.7", default-features = false, features = [
+    "server",
+    "transport-io",
+    "transport-streamable-http-server",
+    "transport-streamable-http-server-session",
+    "tower",
+] }
+
+# HTTP router hosting rmcp's StreamableHttpService at /mcp plus the non-MCP REST
+# endpoints (/health, /query, /search) that server.ts also serves.
+axum = "0.8"
+
+serde      = { workspace = true }
+# `preserve_order` keeps structuredContent / REST JSON key order stable, matching
+# the rest of rqmd (rqmd-core also pins this).
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow     = "1"
+tracing    = "0.1"
+
+# Async runtime: the rmcp server + axum both run on tokio. `net`/`signal` are for
+# the HTTP listener and graceful shutdown; `sync` for the store-worker channels;
+# `rt` (current-thread) + `time` for the dedicated store-worker runtime.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+    "sync",
+    "time",
+] }
+
+[dev-dependencies]
+# Integration tests drive the server with an in-process rmcp client over a duplex
+# stream; `client` pulls in the client half. `tempfile` seeds a throwaway index.
+rmcp     = { version = "1.7", default-features = false, features = ["client", "transport-io"] }
+tempfile = { workspace = true }
+tokio    = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+# HTTP layer is tested in-process via `ServiceExt::oneshot` on the axum Router —
+# no sockets, no TLS/OpenSSL. `tower` "util" provides `oneshot`.
+tower    = { version = "0.5", features = ["util"] }
