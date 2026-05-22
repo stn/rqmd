@@ -98,9 +98,7 @@ fn open_rejects_both_config_inputs() {
         config_path: Some(ws.path().join("rqmd.yml")),
         config: Some(ConfigData::default()),
     });
-    let err = result
-        .map(|_| ())
-        .expect_err("should reject both");
+    let err = result.map(|_| ()).expect_err("should reject both");
     assert!(matches!(err, RqmdStoreError::InvalidOptions(_)));
 }
 
@@ -205,9 +203,7 @@ fn set_and_get_global_context() {
     let ws = TempDir::new().unwrap();
     let mut store = open_db_only(&ws);
     assert_eq!(store.get_global_context().unwrap(), None);
-    store
-        .set_global_context(Some("hello".into()))
-        .expect("set");
+    store.set_global_context(Some("hello".into())).expect("set");
     assert_eq!(
         store.get_global_context().unwrap(),
         Some("hello".to_string())
@@ -511,7 +507,10 @@ fn open_db_only_at(db_path: PathBuf) -> RqmdStore {
 
 async fn open_indexed(ws: &TempDir, collections: Vec<(&str, String)>) -> RqmdStore {
     let mut store = open_inline_with(db(ws), collections);
-    store.update(UpdateOptions::default()).await.expect("update");
+    store
+        .update(UpdateOptions::default())
+        .await
+        .expect("update");
     store
 }
 
@@ -622,11 +621,13 @@ fn add_collection_with_default_pattern() {
             },
         )
         .unwrap();
-    assert!(store
-        .list_collections()
-        .unwrap()
-        .iter()
-        .any(|c| c.name == "notes"));
+    assert!(
+        store
+            .list_collections()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "notes")
+    );
 }
 
 #[test]
@@ -636,11 +637,13 @@ fn remove_collection_removes_existing() {
     let mut store = open_inline_with(db(&ws), vec![("docs", docs_dir(&fx))]);
     let removed = store.remove_collection("docs").unwrap();
     assert!(removed);
-    assert!(!store
-        .list_collections()
-        .unwrap()
-        .iter()
-        .any(|c| c.name == "docs"));
+    assert!(
+        !store
+            .list_collections()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "docs")
+    );
 }
 
 #[test]
@@ -654,10 +657,7 @@ fn rename_collection_returns_false_for_missing_source_store() {
 fn rename_collection_errors_if_target_exists_store() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let mut store = open_inline_with(
-        db(&ws),
-        vec![("a", docs_dir(&fx)), ("b", notes_dir(&fx))],
-    );
+    let mut store = open_inline_with(db(&ws), vec![("a", docs_dir(&fx)), ("b", notes_dir(&fx))]);
     // Renaming onto an existing name yields a typed DuplicateCollection error
     // (message contains "already exists", matching qmd).
     let err = store.rename_collection("a", "b").unwrap_err();
@@ -747,7 +747,9 @@ fn add_context_adds_to_collection_path() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
     let mut store = open_docs_notes_inline(&ws, &fx);
-    let added = store.add_context("docs", "/auth", "Authentication docs").unwrap();
+    let added = store
+        .add_context("docs", "/auth", "Authentication docs")
+        .unwrap();
     assert!(added);
     assert!(has_ctx(&store, "docs", "/auth", "Authentication docs"));
 }
@@ -757,9 +759,11 @@ fn add_context_returns_false_for_missing_collection() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
     let mut store = open_docs_notes_inline(&ws, &fx);
-    assert!(!store
-        .add_context("nonexistent", "/path", "Some context")
-        .unwrap());
+    assert!(
+        !store
+            .add_context("nonexistent", "/path", "Some context")
+            .unwrap()
+    );
 }
 
 #[test]
@@ -767,13 +771,17 @@ fn remove_context_removes_existing() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
     let mut store = open_docs_notes_inline(&ws, &fx);
-    store.add_context("docs", "/auth", "Authentication docs").unwrap();
+    store
+        .add_context("docs", "/auth", "Authentication docs")
+        .unwrap();
     assert!(store.remove_context("docs", "/auth").unwrap());
-    assert!(!store
-        .list_contexts()
-        .unwrap()
-        .iter()
-        .any(|e| e.path == "/auth"));
+    assert!(
+        !store
+            .list_contexts()
+            .unwrap()
+            .iter()
+            .any(|e| e.path == "/auth")
+    );
 }
 
 #[test]
@@ -789,7 +797,9 @@ fn set_global_context_with_none_clears() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
     let mut store = open_docs_notes_inline(&ws, &fx);
-    store.set_global_context(Some("Some context".into())).unwrap();
+    store
+        .set_global_context(Some("Some context".into()))
+        .unwrap();
     store.set_global_context(None).unwrap();
     assert_eq!(store.get_global_context().unwrap(), None);
 }
@@ -799,7 +809,9 @@ fn list_contexts_includes_global() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
     let mut store = open_docs_notes_inline(&ws, &fx);
-    store.set_global_context(Some("Global context".into())).unwrap();
+    store
+        .set_global_context(Some("Global context".into()))
+        .unwrap();
     assert!(has_ctx(&store, "*", "/", "Global context"));
 }
 
@@ -895,11 +907,13 @@ fn inline_config_mutations_persist_within_session() {
         )
         .unwrap();
     store.add_context("docs", "/", "My docs").unwrap();
-    assert!(store
-        .list_collections()
-        .unwrap()
-        .iter()
-        .any(|c| c.name == "docs"));
+    assert!(
+        store
+            .list_collections()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "docs")
+    );
     assert!(has_ctx(&store, "docs", "/", "My docs"));
 }
 
@@ -1000,7 +1014,11 @@ fn context_persists_to_yaml() {
         config: None,
     })
     .unwrap();
-    assert!(store.add_context("docs", "/api", "API documentation").unwrap());
+    assert!(
+        store
+            .add_context("docs", "/api", "API documentation")
+            .unwrap()
+    );
     drop(store);
 
     let reloaded = Config::from_file(&yaml).unwrap();
@@ -1030,7 +1048,11 @@ fn non_existent_config_file_returns_empty() {
 async fn search_lex_returns_results() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store = open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let results = store.search_lex("authentication", None, None).unwrap();
     assert!(!results.is_empty());
 }
@@ -1039,7 +1061,11 @@ async fn search_lex_returns_results() {
 async fn search_lex_result_shape() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store = open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let results = store.search_lex("authentication", None, None).unwrap();
     assert!(!results.is_empty());
     let r = &results[0];
@@ -1054,7 +1080,11 @@ async fn search_lex_result_shape() {
 async fn search_lex_respects_limit() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store = open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let results = store.search_lex("meeting", Some(1), None).unwrap();
     assert!(results.len() <= 1);
 }
@@ -1063,8 +1093,14 @@ async fn search_lex_respects_limit() {
 async fn search_lex_with_collection_filter() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store = open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
-    let results = store.search_lex("authentication", None, Some("notes")).unwrap();
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
+    let results = store
+        .search_lex("authentication", None, Some("notes"))
+        .unwrap();
     for r in &results {
         assert_eq!(r.doc.collection_name, "notes");
     }
@@ -1074,8 +1110,14 @@ async fn search_lex_with_collection_filter() {
 async fn search_lex_empty_for_non_matching() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store = open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
-    let results = store.search_lex("xyznonexistentterm123", None, None).unwrap();
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
+    let results = store
+        .search_lex("xyznonexistentterm123", None, None)
+        .unwrap();
     assert!(results.is_empty());
 }
 
@@ -1083,10 +1125,16 @@ async fn search_lex_empty_for_non_matching() {
 async fn search_lex_finds_documents_across_collections() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store = open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let results = store.search_lex("authentication", Some(10), None).unwrap();
-    let collections: std::collections::HashSet<_> =
-        results.iter().map(|r| r.doc.collection_name.clone()).collect();
+    let collections: std::collections::HashSet<_> = results
+        .iter()
+        .map(|r| r.doc.collection_name.clone())
+        .collect();
     assert!(!collections.is_empty());
 }
 
@@ -1222,8 +1270,10 @@ async fn second_update_shows_unchanged_files() {
 async fn update_multiple_collections() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let mut store =
-        open_inline_with(db(&ws), vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]);
+    let mut store = open_inline_with(
+        db(&ws),
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    );
     let result = store.update(UpdateOptions::default()).await.unwrap();
     assert_eq!(result.collections, 2);
     assert_eq!(result.indexed, 6);
@@ -1318,7 +1368,8 @@ async fn reopen_store_with_just_db_path_after_config_update() {
             ..Default::default()
         };
         data.collections.insert("docs".into(), coll(&docs_dir(&fx)));
-        data.collections.insert("notes".into(), coll(&notes_dir(&fx)));
+        data.collections
+            .insert("notes".into(), coll(&notes_dir(&fx)));
         let mut s1 = RqmdStore::open(RqmdStoreOptions {
             db_path: dbp.clone(),
             config: Some(data),
@@ -1339,7 +1390,11 @@ async fn reopen_store_with_just_db_path_after_config_update() {
         .collect();
     names.sort();
     assert_eq!(names, vec!["docs".to_string(), "notes".to_string()]);
-    assert!(!s2.search_lex("authentication", None, None).unwrap().is_empty());
+    assert!(
+        !s2.search_lex("authentication", None, None)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         s2.get_global_context().unwrap(),
         Some("Test knowledge base".to_string())
@@ -1448,7 +1503,9 @@ fn changed_config_resyncs_and_drops_missing_collection() {
     }
 
     let mut data2 = ConfigData::default();
-    data2.collections.insert("notes".into(), coll(&notes_dir(&fx)));
+    data2
+        .collections
+        .insert("notes".into(), coll(&notes_dir(&fx)));
     let s2 = RqmdStore::open(RqmdStoreOptions {
         db_path: dbp,
         config: Some(data2),
@@ -1529,7 +1586,8 @@ fn db_only_mode_supports_context_mutations() {
         })
         .unwrap();
         assert!(s1.add_context("docs", "/api", "API docs").unwrap());
-        s1.set_global_context(Some("Global context".into())).unwrap();
+        s1.set_global_context(Some("Global context".into()))
+            .unwrap();
     }
 
     let s2 = open_db_only_at(dbp);
@@ -1545,8 +1603,11 @@ fn db_only_mode_supports_context_mutations() {
 async fn search_with_pre_expanded_queries_and_rerank_false() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store =
-        open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let results = store
         .search(SearchOptions {
             queries: Some(vec![
@@ -1574,8 +1635,11 @@ async fn search_with_pre_expanded_queries_and_rerank_false() {
 async fn search_forwards_candidate_limit_to_structured_search() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store =
-        open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let results = store
         .search(SearchOptions {
             queries: Some(vec![
@@ -1685,8 +1749,11 @@ async fn embed_forwards_batch_limit_options_gguf() {
 async fn embed_scopes_pending_documents_to_collection_gguf() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let mut store =
-        open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let mut store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let result = store
         .embed(StoreOpsEmbedOptions {
             collection: Some("docs".into()),
@@ -1705,8 +1772,11 @@ async fn embed_scopes_pending_documents_to_collection_gguf() {
 async fn embed_with_force_only_clears_requested_collection_gguf() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let mut store =
-        open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let mut store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     store.embed(StoreOpsEmbedOptions::default()).await.unwrap();
     assert_eq!(vec_count(&store, "docs"), 3);
     assert_eq!(vec_count(&store, "notes"), 3);
@@ -1730,8 +1800,11 @@ async fn embed_with_force_only_clears_requested_collection_gguf() {
 async fn search_with_query_expansion_gguf() {
     let ws = TempDir::new().unwrap();
     let fx = make_sdk_fixture();
-    let store =
-        open_indexed(&ws, vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))]).await;
+    let store = open_indexed(
+        &ws,
+        vec![("docs", docs_dir(&fx)), ("notes", notes_dir(&fx))],
+    )
+    .await;
     let results = store
         .search(SearchOptions {
             query: Some("authentication".into()),

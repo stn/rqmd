@@ -2,7 +2,7 @@
 //!
 //! Maps to qmd's `qmd ls` in `src/cli/qmd.ts` (lines 1340–1498).
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rqmd_core::db::params;
 use rqmd_core::store::context::list_collections;
 use rqmd_core::store::virtual_path::{is_virtual_path, parse_virtual_path};

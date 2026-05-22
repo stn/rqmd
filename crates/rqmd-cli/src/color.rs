@@ -16,11 +16,7 @@ impl Palette {
     }
 
     fn code(&self, s: &'static str) -> &'static str {
-        if self.enabled {
-            s
-        } else {
-            ""
-        }
+        if self.enabled { s } else { "" }
     }
 
     pub fn reset(&self) -> &'static str {

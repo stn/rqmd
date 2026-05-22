@@ -199,11 +199,13 @@ fn update_collection_settings_include_by_default_three_values() {
             .include_by_default,
         None
     );
-    assert!(config
-        .get_collection("docs")
-        .unwrap()
-        .collection
-        .is_included_by_default());
+    assert!(
+        config
+            .get_collection("docs")
+            .unwrap()
+            .collection
+            .is_included_by_default()
+    );
 
     // SetFalse → Some(false)
     config

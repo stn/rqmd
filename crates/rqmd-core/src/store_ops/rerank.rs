@@ -6,14 +6,14 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::store::cache::{get_cached_result, set_cached_result};
 use crate::store::Store;
+use crate::store::cache::{get_cached_result, set_cached_result};
 
 use crate::llm::traits::Llm;
 use crate::llm::types::{RerankDocument, RerankOptions};
 
-use super::cache_keys::{legacy_rerank_cache_key, rerank_cache_key};
 use super::Result;
+use super::cache_keys::{legacy_rerank_cache_key, rerank_cache_key};
 
 /// One candidate to rerank: a chunk text bound to its source file. Files
 /// repeat naturally — different chunks of the same document score
@@ -95,7 +95,10 @@ pub async fn rerank(
 
         store.with_connection(|conn| {
             for result in &rerank_result.results {
-                let chunk = text_by_file.get(result.file.as_str()).copied().unwrap_or("");
+                let chunk = text_by_file
+                    .get(result.file.as_str())
+                    .copied()
+                    .unwrap_or("");
                 let key = rerank_cache_key(&rerank_query, model, chunk);
                 let _ = set_cached_result(conn, &key, &result.score.to_string());
                 cached.insert(chunk.to_string(), result.score);

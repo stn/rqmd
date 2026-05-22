@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
+use ignore::overrides::OverrideBuilder;
 use rusqlite::Connection;
 
 use super::docid::handelize;

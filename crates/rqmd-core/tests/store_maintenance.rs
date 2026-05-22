@@ -7,11 +7,11 @@
 //! distinguishes the early-return / swallow / delete paths (a single
 //! "returns 0" assertion could not).
 
+use rqmd_core::Store;
 use rqmd_core::store::documents::{hash_content, insert_content, insert_document};
 use rqmd_core::store::embeddings::{ensure_vec_table, insert_embedding};
 use rqmd_core::store::maintenance::cleanup_orphaned_vectors;
 use rqmd_core::store::path::now_rfc3339;
-use rqmd_core::Store;
 use tempfile::NamedTempFile;
 
 fn open() -> (NamedTempFile, Store) {

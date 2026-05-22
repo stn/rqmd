@@ -3,14 +3,14 @@
 //! Port of `tobi/qmd`'s `src/store.ts` lines 2566–2617 + 3720–3983.
 
 use globset::Glob;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
+use super::DEFAULT_MULTI_GET_MAX_BYTES;
 use super::context::get_context_for_file;
 use super::docid::{find_document_by_docid, get_docid, is_docid};
 use super::path::homedir;
 use super::search::{DocumentNotFound, DocumentResult, MultiGetResult};
 use super::store_config::get_store_collections;
-use super::DEFAULT_MULTI_GET_MAX_BYTES;
 use super::{Error, Result};
 
 // ============================================================================

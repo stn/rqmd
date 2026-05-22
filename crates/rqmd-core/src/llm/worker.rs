@@ -69,11 +69,7 @@ impl EmbedWorker {
     /// its `LlamaContext`. Failure to create the context returns
     /// [`Error::Llama`]; failure to spawn the OS thread returns
     /// [`Error::Io`].
-    pub fn spawn(
-        model: Arc<LlamaModel>,
-        pooling: LlamaPoolingType,
-        n_ctx: usize,
-    ) -> Result<Self> {
+    pub fn spawn(model: Arc<LlamaModel>, pooling: LlamaPoolingType, n_ctx: usize) -> Result<Self> {
         let (job_tx, job_rx) = mpsc::channel::<EmbedJob>();
         let (ack_tx, ack_rx) = mpsc::sync_channel::<Result<()>>(1);
 
@@ -110,7 +106,10 @@ impl EmbedWorker {
     pub async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Option<Vec<f32>>>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.sender
-            .send(EmbedJob { texts, reply: reply_tx })
+            .send(EmbedJob {
+                texts,
+                reply: reply_tx,
+            })
             .map_err(|_| Error::WorkerClosed)?;
         reply_rx.await.map_err(|_| Error::WorkerClosed)
     }
@@ -137,10 +136,7 @@ impl Drop for EmbedWorker {
         // close the channel so the worker can exit. We do NOT block on
         // join here because Drop runs in arbitrary contexts (including
         // potentially under a tokio runtime where blocking is illegal).
-        drop(std::mem::replace(
-            &mut self.sender,
-            mpsc::channel().0,
-        ));
+        drop(std::mem::replace(&mut self.sender, mpsc::channel().0));
         // self.join intentionally not awaited — leaked threads are
         // preferable to a deadlocked Drop. Callers wanting deterministic
         // shutdown should call join_blocking explicitly.
@@ -292,7 +288,10 @@ impl RerankWorker {
     pub async fn rerank_batch(&self, prompts: Vec<String>) -> Result<Vec<Option<f32>>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.sender
-            .send(RerankJob { prompts, reply: reply_tx })
+            .send(RerankJob {
+                prompts,
+                reply: reply_tx,
+            })
             .map_err(|_| Error::WorkerClosed)?;
         reply_rx.await.map_err(|_| Error::WorkerClosed)
     }
@@ -347,11 +346,7 @@ fn run_rerank_worker(
     }
 }
 
-fn process_one_rerank(
-    ctx: &mut LlamaContext<'_>,
-    model: &LlamaModel,
-    prompt: &str,
-) -> Result<f32> {
+fn process_one_rerank(ctx: &mut LlamaContext<'_>, model: &LlamaModel, prompt: &str) -> Result<f32> {
     // AddBos::Never — the chat-template prompt already brackets with
     // <|im_start|> tags (spike #3 finding).
     let tokens = model
@@ -511,10 +506,7 @@ pub fn split_into_chunks<T: Clone>(items: Vec<T>, n_chunks: usize) -> Vec<Vec<T>
     }
     let n = n_chunks.min(items.len());
     let chunk_size = items.len().div_ceil(n);
-    items
-        .chunks(chunk_size)
-        .map(<[T]>::to_vec)
-        .collect()
+    items.chunks(chunk_size).map(<[T]>::to_vec).collect()
 }
 
 #[cfg(test)]

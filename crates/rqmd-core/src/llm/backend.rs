@@ -15,7 +15,7 @@
 use std::sync::{Once, OnceLock};
 
 use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::{send_logs_to_tracing, LogOptions};
+use llama_cpp_2::{LogOptions, send_logs_to_tracing};
 
 use crate::llm::error::{Error, Result};
 

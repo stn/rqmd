@@ -110,7 +110,12 @@ pub struct ActiveDocument {
 }
 
 /// Insert content if not already present (content-addressable).
-pub fn insert_content(conn: &Connection, hash: &str, content: &str, created_at: &str) -> Result<()> {
+pub fn insert_content(
+    conn: &Connection,
+    hash: &str,
+    content: &str,
+    created_at: &str,
+) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO content (hash, doc, created_at) VALUES (?, ?, ?)",
         params![hash, content, created_at],
@@ -274,7 +279,10 @@ pub fn rebuild_document_fts(conn: &Connection, document_id: i64) -> Result<()> {
         )
         .optional()?;
 
-    conn.execute("DELETE FROM documents_fts WHERE rowid = ?", params![document_id])?;
+    conn.execute(
+        "DELETE FROM documents_fts WHERE rowid = ?",
+        params![document_id],
+    )?;
 
     if let Some((id, collection, path, title, body)) = row {
         let filepath = normalize_cjk_for_fts(&format!("{collection}/{path}"));

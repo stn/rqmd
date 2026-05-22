@@ -17,8 +17,8 @@
 
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -111,7 +111,11 @@ fn keyword_overlap_score(query: &str, text: &str) -> f32 {
 
 #[async_trait]
 impl Llm for MockLlm {
-    async fn embed(&self, text: &str, _opts: EmbedOptions) -> rqmd_core::llm::error::Result<Option<EmbeddingResult>> {
+    async fn embed(
+        &self,
+        text: &str,
+        _opts: EmbedOptions,
+    ) -> rqmd_core::llm::error::Result<Option<EmbeddingResult>> {
         self.embed_calls.fetch_add(1, Ordering::Relaxed);
         let v = self
             .embed_overrides
@@ -210,7 +214,11 @@ impl Llm for MockLlm {
                 }
             })
             .collect();
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(RerankResult {
             results,
             model: "mock".into(),

@@ -177,7 +177,8 @@ async fn in_flight_count_returns_to_zero_after_concurrent_method_calls() {
     for _ in 0..16 {
         let llm = llm.clone();
         handles.push(tokio::spawn(async move {
-            llm.embed_batch(&["x".into()], EmbedOptions::default()).await
+            llm.embed_batch(&["x".into()], EmbedOptions::default())
+                .await
         }));
     }
     for h in handles {

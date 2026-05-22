@@ -9,7 +9,7 @@
 pub mod score;
 pub mod types;
 
-pub use score::{normalize_path, paths_match, score_results, ScoreMetrics};
+pub use score::{ScoreMetrics, normalize_path, paths_match, score_results};
 pub use types::{
     BackendResult, BenchmarkFixture, BenchmarkQuery, BenchmarkResult, QueryResult, SummaryStats,
 };

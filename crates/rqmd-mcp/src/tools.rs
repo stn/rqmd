@@ -522,7 +522,10 @@ pub async fn handle_multi_get(store: &RqmdStore, args: Value) -> Result<CallTool
 
     let mut content: Vec<Content> = Vec::new();
     if !bundle.errors.is_empty() {
-        content.push(Content::text(format!("Errors:\n{}", bundle.errors.join("\n"))));
+        content.push(Content::text(format!(
+            "Errors:\n{}",
+            bundle.errors.join("\n")
+        )));
     }
 
     for doc in bundle.docs {
@@ -594,7 +597,10 @@ pub fn format_status_summary(status: &IndexStatus) -> String {
     for col in &status.collections {
         // `${col.path}` renders "null" in JS when path is null.
         let path = col.path.as_deref().unwrap_or("null");
-        lines.push(format!("    - {}: {} ({} docs)", col.name, path, col.documents));
+        lines.push(format!(
+            "    - {}: {} ({} docs)",
+            col.name, path, col.documents
+        ));
     }
     lines.join("\n")
 }
@@ -689,7 +695,9 @@ pub fn build_instructions(store: &RqmdStore) -> Option<String> {
     lines.push("Search: Use `query` with sub-queries (lex/vec/hyde):".to_string());
     lines.push("  - type:'lex' — BM25 keyword search (exact terms, fast)".to_string());
     lines.push("  - type:'vec' — semantic vector search (meaning-based)".to_string());
-    lines.push("  - type:'hyde' — hypothetical document (write what the answer looks like)".to_string());
+    lines.push(
+        "  - type:'hyde' — hypothetical document (write what the answer looks like)".to_string(),
+    );
     lines.push(String::new());
     lines.push(
         "  Always provide `intent` on every search call to disambiguate and improve snippets."
@@ -698,7 +706,9 @@ pub fn build_instructions(store: &RqmdStore) -> Option<String> {
     lines.push(String::new());
     lines.push("Examples:".to_string());
     lines.push("  Quick keyword lookup: [{type:'lex', query:'error handling'}]".to_string());
-    lines.push("  Semantic search: [{type:'vec', query:'how to handle errors gracefully'}]".to_string());
+    lines.push(
+        "  Semantic search: [{type:'vec', query:'how to handle errors gracefully'}]".to_string(),
+    );
     lines.push(
         "  Best results: [{type:'lex', query:'error'}, {type:'vec', query:'error handling best practices'}]"
             .to_string(),
@@ -730,7 +740,13 @@ pub fn build_instructions(store: &RqmdStore) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn item(docid: &str, file: &str, title: &str, score: f64, ctx: Option<&str>) -> SearchResultItem {
+    fn item(
+        docid: &str,
+        file: &str,
+        title: &str,
+        score: f64,
+        ctx: Option<&str>,
+    ) -> SearchResultItem {
         SearchResultItem {
             docid: docid.to_string(),
             file: file.to_string(),
@@ -777,7 +793,9 @@ mod tests {
         let keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
         assert_eq!(
             keys,
-            vec!["docid", "file", "title", "score", "context", "line", "snippet"]
+            vec![
+                "docid", "file", "title", "score", "context", "line", "snippet"
+            ]
         );
     }
 

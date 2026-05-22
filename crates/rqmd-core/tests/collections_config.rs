@@ -6,8 +6,8 @@ mod common;
 
 use std::path::PathBuf;
 
-use rqmd_core::paths::rqmd_homedir;
 use rqmd_core::Config;
+use rqmd_core::paths::rqmd_homedir;
 use serial_test::serial;
 
 use common::{EnvGuard, PATH_ENV_KEYS};
@@ -26,7 +26,10 @@ fn defaults_to_home_config_rqmd_when_no_env_vars() {
     let config = Config::from_default_location().unwrap();
     assert_eq!(
         config_path(&config),
-        rqmd_homedir().join(".config").join("rqmd").join("index.yml")
+        rqmd_homedir()
+            .join(".config")
+            .join("rqmd")
+            .join("index.yml")
     );
 }
 
@@ -117,7 +120,9 @@ fn respects_custom_index_name() {
     let config = Config::from_default_location_with_index_name("myindex").unwrap();
     assert_eq!(
         config_path(&config),
-        PathBuf::from("/xdg/config").join("rqmd").join("myindex.yml")
+        PathBuf::from("/xdg/config")
+            .join("rqmd")
+            .join("myindex.yml")
     );
 }
 

@@ -8,9 +8,8 @@
 use serial_test::serial;
 
 use rqmd_core::llm::gpu::{
-    resolve_llama_gpu_mode, resolve_llama_gpu_mode_from_env, resolve_parallelism_override,
-    resolve_safe_parallelism, windows_cuda_serialization_required, LlamaGpuMode,
-    ParallelismOptions,
+    LlamaGpuMode, ParallelismOptions, resolve_llama_gpu_mode, resolve_llama_gpu_mode_from_env,
+    resolve_parallelism_override, resolve_safe_parallelism, windows_cuda_serialization_required,
 };
 
 // =============================================================================

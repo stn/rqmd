@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rqmd_core::store::path::{homedir, pwd, real_path};
 use rqmd_core::store::virtual_path::{is_virtual_path, parse_virtual_path};
 

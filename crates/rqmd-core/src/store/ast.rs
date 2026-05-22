@@ -610,17 +610,20 @@ export function hashPassword(password: string): string {
     fn break_points_typescript_scores_hierarchy() {
         let bps = get_ast_break_points(TS_SAMPLE, "src/auth.ts");
         // interface -> AstClass = 100
-        assert!(bps
-            .iter()
-            .any(|b| b.kind == BreakKind::AstClass && b.score == 100));
+        assert!(
+            bps.iter()
+                .any(|b| b.kind == BreakKind::AstClass && b.score == 100)
+        );
         // method -> AstFunc = 90
-        assert!(bps
-            .iter()
-            .any(|b| b.kind == BreakKind::AstFunc && b.score == 90));
+        assert!(
+            bps.iter()
+                .any(|b| b.kind == BreakKind::AstFunc && b.score == 90)
+        );
         // import -> AstImport = 60
-        assert!(bps
-            .iter()
-            .any(|b| b.kind == BreakKind::AstImport && b.score == 60));
+        assert!(
+            bps.iter()
+                .any(|b| b.kind == BreakKind::AstImport && b.score == 60)
+        );
     }
 
     #[test]
@@ -792,17 +795,19 @@ fn hash_password(password: &str) -> String {
     fn score_typescript_export_is_func_90() {
         // TS `export` folds to AstFunc (score 90) in this port.
         let bps = get_ast_break_points("export class Foo {}\nexport function bar() {}", "a.ts");
-        assert!(bps
-            .iter()
-            .any(|b| b.kind == BreakKind::AstFunc && b.score == 90));
+        assert!(
+            bps.iter()
+                .any(|b| b.kind == BreakKind::AstFunc && b.score == 90)
+        );
     }
 
     #[test]
     fn score_python_class_100() {
         let bps = get_ast_break_points("class Foo:\n    pass\n\ndef bar():\n    pass", "a.py");
-        assert!(bps
-            .iter()
-            .any(|b| b.kind == BreakKind::AstClass && b.score == 100));
+        assert!(
+            bps.iter()
+                .any(|b| b.kind == BreakKind::AstClass && b.score == 100)
+        );
     }
 
     #[test]
@@ -811,9 +816,10 @@ fn hash_password(password: &str) -> String {
             "package main\n\ntype Server struct {\n    port int\n}\n\nfunc main() {}",
             "a.go",
         );
-        assert!(bps
-            .iter()
-            .any(|b| b.kind == BreakKind::AstType && b.score == 80));
+        assert!(
+            bps.iter()
+                .any(|b| b.kind == BreakKind::AstType && b.score == 80)
+        );
     }
 
     #[test]
@@ -821,9 +827,10 @@ fn hash_password(password: &str) -> String {
         // enum folds to AstType (score 80).
         let bps =
             get_ast_break_points("enum State {\n    On,\n    Off,\n}\n\nfn main() {}", "a.rs");
-        assert!(bps
-            .iter()
-            .any(|b| b.kind == BreakKind::AstType && b.score == 80));
+        assert!(
+            bps.iter()
+                .any(|b| b.kind == BreakKind::AstType && b.score == 80)
+        );
     }
 
     // ---- extract_symbols (Phase 2 stub) ----

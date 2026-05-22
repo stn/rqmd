@@ -36,14 +36,14 @@ pub mod vector_search;
 pub use crate::store::embeddings::{EmbeddingDoc, HashForEmbedding, PendingEmbeddingDoc};
 pub use crate::store::status::{IndexHealthInfo, IndexStatus};
 
-pub use chunk_tokens::{chunk_document_by_tokens, TokenChunk};
-pub use embed::{generate_embeddings, EmbedOptions, EmbedProgress, EmbedResult};
-pub use expand::{expand_query, ExpandedQuery, ExpandedQueryType};
-pub use hybrid::{hybrid_query, HybridQueryOptions, HybridQueryResult, SearchHooks};
-pub use rerank::{rerank, RerankCandidate, RerankScore};
+pub use chunk_tokens::{TokenChunk, chunk_document_by_tokens};
+pub use embed::{EmbedOptions, EmbedProgress, EmbedResult, generate_embeddings};
+pub use expand::{ExpandedQuery, ExpandedQueryType, expand_query};
+pub use hybrid::{HybridQueryOptions, HybridQueryResult, SearchHooks, hybrid_query};
+pub use rerank::{RerankCandidate, RerankScore, rerank};
 pub use search::search_vec;
-pub use structured::{structured_search, StructuredSearchOptions};
-pub use vector_search::{vector_search_query, VectorSearchOptions, VectorSearchResult};
+pub use structured::{StructuredSearchOptions, structured_search};
+pub use vector_search::{VectorSearchOptions, VectorSearchResult, vector_search_query};
 
 /// Errors produced by orchestration functions. Wraps both `collections`
 /// and `llm` errors so callers don't have to convert manually, and adds

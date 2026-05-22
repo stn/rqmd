@@ -9,22 +9,22 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use indexmap::IndexMap;
 
+use rqmd_core::Store;
 use rqmd_core::bench::{
-    score_results, BackendResult, BenchmarkFixture, BenchmarkQuery, BenchmarkResult, QueryResult,
-    SummaryStats,
+    BackendResult, BenchmarkFixture, BenchmarkQuery, BenchmarkResult, QueryResult, SummaryStats,
+    score_results,
 };
 use rqmd_core::llm::config::resolve_embed_model;
 use rqmd_core::llm::traits::Llm;
 use rqmd_core::store::path::now_rfc3339;
 use rqmd_core::store::search::search_fts;
 use rqmd_core::store_ops::{
-    hybrid_query, search_vec, structured_search, ExpandedQuery, ExpandedQueryType,
-    HybridQueryOptions, StructuredSearchOptions,
+    ExpandedQuery, ExpandedQueryType, HybridQueryOptions, StructuredSearchOptions, hybrid_query,
+    search_vec, structured_search,
 };
-use rqmd_core::Store;
 
 use crate::cli::BenchArgs;
 use crate::state::IndexState;
@@ -37,12 +37,15 @@ pub async fn run(args: BenchArgs, state: &mut IndexState) -> Result<()> {
     // (non-optional field) as a parse error.
     let raw = std::fs::read_to_string(&args.fixture)
         .with_context(|| format!("reading fixture {}", args.fixture))?;
-    let fixture: BenchmarkFixture = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing fixture {}", args.fixture))?;
+    let fixture: BenchmarkFixture =
+        serde_json::from_str(&raw).with_context(|| format!("parsing fixture {}", args.fixture))?;
 
     let json = args.json;
     // CLI flag overrides the fixture's default collection.
-    let collection = args.collection.clone().or_else(|| fixture.collection.clone());
+    let collection = args
+        .collection
+        .clone()
+        .or_else(|| fixture.collection.clone());
     let embed_model = resolve_embed_model(None);
 
     // Borrow order (see vsearch.rs): take the owned `Arc<LlamaCpp>` first, then
@@ -156,7 +159,11 @@ async fn run_backend(
         "bm25" => {
             if let Some(s) = &structured {
                 let mut files = Vec::new();
-                for sub in s.searches.iter().filter(|q| q.type_ == ExpandedQueryType::Lex) {
+                for sub in s
+                    .searches
+                    .iter()
+                    .filter(|q| q.type_ == ExpandedQueryType::Lex)
+                {
                     let hits = store
                         .with_connection(|c| search_fts(c, &sub.query, Some(limit), collection))?;
                     files.extend(hits.iter().map(|r| r.doc.filepath.clone()));
@@ -177,9 +184,16 @@ async fn run_backend(
                     .iter()
                     .filter(|q| matches!(q.type_, ExpandedQueryType::Vec | ExpandedQueryType::Hyde))
                 {
-                    let hits =
-                        search_vec(store, llm.clone(), &sub.query, embed_model, limit, collection, None)
-                            .await?;
+                    let hits = search_vec(
+                        store,
+                        llm.clone(),
+                        &sub.query,
+                        embed_model,
+                        limit,
+                        collection,
+                        None,
+                    )
+                    .await?;
                     files.extend(hits.iter().map(|r| r.doc.filepath.clone()));
                 }
                 Ok(unique_files(files, limit))
@@ -513,7 +527,10 @@ mod tests {
     #[test]
     fn multiline_missing_prefix_errors() {
         let err = parse_structured_query("lex: auth\nplain line").unwrap_err();
-        assert!(err.to_string().contains("missing a lex:/vec:/hyde:/intent: prefix"));
+        assert!(
+            err.to_string()
+                .contains("missing a lex:/vec:/hyde:/intent: prefix")
+        );
     }
 
     #[test]

@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
-use rqmd_core::llm::llama_cpp::LlamaCpp;
-use rqmd_core::llm::session::{with_llm_session, LlmSession, LlmSessionOptions};
-use rqmd_core::llm::traits::Llm;
 use rqmd_core::LlamaCppConfig;
+use rqmd_core::llm::llama_cpp::LlamaCpp;
+use rqmd_core::llm::session::{LlmSession, LlmSessionOptions, with_llm_session};
+use rqmd_core::llm::traits::Llm;
 
 #[allow(dead_code)]
 async fn takes_llm(_llm: Arc<dyn Llm>) {}

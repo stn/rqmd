@@ -9,22 +9,25 @@
 use std::io::IsTerminal;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use rqmd_core::Store;
+use rqmd_core::llm::traits::Llm;
 use rqmd_core::store::virtual_path::resolve_virtual_path;
 use rqmd_core::store_ops::{
-    hybrid_query, structured_search, ExpandedQuery, ExpandedQueryType, HybridQueryOptions,
-    SearchHooks, StructuredSearchOptions,
+    ExpandedQuery, ExpandedQueryType, HybridQueryOptions, SearchHooks, StructuredSearchOptions,
+    hybrid_query, structured_search,
 };
-use rqmd_core::llm::traits::Llm;
-use rqmd_core::Store;
 use serde_json::json;
 
 use crate::cli::QueryArgs;
-use crate::collection_filter::{filter_by_collections, resolve_collection_filter, single_collection};
+use crate::collection_filter::{
+    filter_by_collections, resolve_collection_filter, single_collection,
+};
 use crate::color::Palette;
 use crate::output::OutputFormat;
 use crate::search_view::{
-    editor_uri_template, hybrid_result_to_hit, print_hits, to_qmd_path, CliLinkCtx, ExplainView, Hit,
+    CliLinkCtx, ExplainView, Hit, editor_uri_template, hybrid_result_to_hit, print_hits,
+    to_qmd_path,
 };
 use crate::state::IndexState;
 
@@ -65,7 +68,11 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
             pq.searches
                 .iter()
                 .find(|s| s.type_ == ExpandedQueryType::Lex)
-                .or_else(|| pq.searches.iter().find(|s| s.type_ == ExpandedQueryType::Vec))
+                .or_else(|| {
+                    pq.searches
+                        .iter()
+                        .find(|s| s.type_ == ExpandedQueryType::Vec)
+                })
                 .map(|s| s.query.clone())
                 .unwrap_or_else(|| q.clone())
         })
@@ -172,7 +179,14 @@ pub async fn run(args: QueryArgs, state: &mut IndexState, p: &Palette) -> Result
                 }
             });
         }
-        print_hits(&hits, fmt, p, args.flags.line_numbers, &display_query, &link)?;
+        print_hits(
+            &hits,
+            fmt,
+            p,
+            args.flags.line_numbers,
+            &display_query,
+            &link,
+        )?;
     }
     Ok(())
 }
@@ -189,7 +203,9 @@ struct ParsedStructuredQuery {
 /// (`qmd.ts:2507`). An empty `--intent` is falsy in JS, so it falls through to
 /// the parsed `intent:` line; whitespace-only is kept (qmd preserves it too).
 fn resolve_query_intent(flag: Option<&str>, parsed: Option<&str>) -> Option<String> {
-    flag.filter(|s| !s.is_empty()).or(parsed).map(str::to_string)
+    flag.filter(|s| !s.is_empty())
+        .or(parsed)
+        .map(str::to_string)
 }
 
 /// Port of `parseStructuredQuery` (`qmd.ts:2322-2390`). Returns `None` for a
@@ -223,7 +239,9 @@ fn parse_structured_query(query: &str) -> Result<Option<ParsedStructuredQuery>> 
         // The mix check precedes the empty-text check (qmd.ts:2339-2345).
         if lower.starts_with("expand:") {
             if lines.len() > 1 {
-                bail!("Line {number} starts with expand:, but query documents cannot mix expand with typed lines. Submit a single expand query instead.");
+                bail!(
+                    "Line {number} starts with expand:, but query documents cannot mix expand with typed lines. Submit a single expand query instead."
+                );
             }
             let text = trimmed["expand:".len()..].trim();
             if text.is_empty() {
@@ -257,7 +275,9 @@ fn parse_structured_query(query: &str) -> Result<Option<ParsedStructuredQuery>> 
             // check + message faithful to the source.
             if text.contains(['\r', '\n']) {
                 let name = &prefix[..prefix.len() - 1];
-                bail!("Line {number} ({name}:) contains a newline. Keep each query on a single line.");
+                bail!(
+                    "Line {number} ({name}:) contains a newline. Keep each query on a single line."
+                );
             }
             searches.push(ExpandedQuery {
                 type_,
@@ -272,7 +292,9 @@ fn parse_structured_query(query: &str) -> Result<Option<ParsedStructuredQuery>> 
             return Ok(None);
         }
 
-        bail!("Line {number} is missing a lex:/vec:/hyde:/intent: prefix. Each line in a query document must start with one.");
+        bail!(
+            "Line {number} is missing a lex:/vec:/hyde:/intent: prefix. Each line in a query document must start with one."
+        );
     }
 
     // `intent:` alone is not a valid query — must have at least one search.
@@ -341,7 +363,12 @@ fn log_structured_summary(
         } else {
             oneline
         };
-        eprintln!("{}├─ {}: {preview}{}", p.dim(), type_label(s.type_), p.reset());
+        eprintln!(
+            "{}├─ {}: {preview}{}",
+            p.dim(),
+            type_label(s.type_),
+            p.reset()
+        );
     }
     eprintln!("{}└─ Searching...{}", p.dim(), p.reset());
 }
@@ -360,10 +387,7 @@ fn build_query_hooks(fmt: OutputFormat) -> SearchHooks {
             eprintln!("Expanding query...");
         })),
         on_expand: Some(Arc::new(|orig, expanded: &[ExpandedQuery], ms| {
-            eprintln!(
-                "Expanded \"{orig}\" -> {} queries ({ms}ms)",
-                expanded.len()
-            );
+            eprintln!("Expanded \"{orig}\" -> {} queries ({ms}ms)", expanded.len());
             for e in expanded {
                 eprintln!("  [{:?}] {}", e.type_, e.query);
             }
@@ -499,9 +523,7 @@ mod tests {
     #[test]
     fn empty_expand_errors() {
         let err = parse("expand:   ").unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("expand: query must include text"));
+        assert!(err.to_string().contains("expand: query must include text"));
     }
 
     #[test]
@@ -598,7 +620,9 @@ mod tests {
 
     #[test]
     fn surrounding_whitespace_trimmed() {
-        let parsed = parse("  lex:   spaced query  ").unwrap().expect("structured");
+        let parsed = parse("  lex:   spaced query  ")
+            .unwrap()
+            .expect("structured");
         assert_eq!(parsed.searches[0].query, "spaced query");
     }
 
@@ -623,9 +647,10 @@ mod tests {
 
     #[test]
     fn intent_parses_multiple_typed_lines() {
-        let parsed = parse("intent: web page load times\nlex: performance\nvec: how to improve performance")
-            .unwrap()
-            .expect("structured");
+        let parsed =
+            parse("intent: web page load times\nlex: performance\nvec: how to improve performance")
+                .unwrap()
+                .expect("structured");
         assert_eq!(parsed.intent.as_deref(), Some("web page load times"));
         assert_eq!(parsed.searches.len(), 2);
         assert_eq!(parsed.searches[0].type_, ExpandedQueryType::Lex);
@@ -697,7 +722,10 @@ mod tests {
         let parsed = parse("intent: web performance: LCP, FID, CLS\nlex: performance")
             .unwrap()
             .expect("structured");
-        assert_eq!(parsed.intent.as_deref(), Some("web performance: LCP, FID, CLS"));
+        assert_eq!(
+            parsed.intent.as_deref(),
+            Some("web performance: LCP, FID, CLS")
+        );
     }
 
     // =========================================================================
@@ -728,10 +756,12 @@ mod tests {
             .unwrap()
             .expect("structured");
         assert_eq!(parsed.searches.len(), 3);
-        assert!(parsed
-            .searches
-            .iter()
-            .all(|s| s.type_ == ExpandedQueryType::Lex));
+        assert!(
+            parsed
+                .searches
+                .iter()
+                .all(|s| s.type_ == ExpandedQueryType::Lex)
+        );
         assert_eq!(parsed.searches[0].query, "term1");
         assert_eq!(parsed.searches[1].query, "term2");
         assert_eq!(parsed.searches[2].query, "term3");

@@ -198,7 +198,12 @@ fn remove(a: CollectionRemoveArgs, state: &mut IndexState, p: &Palette) -> Resul
     cfg.remove_collection(&a.name)?;
     state.resync_config()?;
 
-    println!("{}✓{} Removed collection '{}'", p.green(), p.reset(), a.name);
+    println!(
+        "{}✓{} Removed collection '{}'",
+        p.green(),
+        p.reset(),
+        a.name
+    );
     println!("  Deleted {} documents", removed.deleted_docs);
     if removed.cleaned_hashes > 0 {
         println!(

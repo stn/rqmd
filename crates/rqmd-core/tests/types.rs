@@ -7,7 +7,9 @@
 //! and LLM cache values), so a wrong rename here would corrupt user
 //! data without ever failing to compile.
 
-use rqmd_core::llm::types::{EmbeddingResult, QueryType, Queryable, RerankDocumentResult, RerankResult};
+use rqmd_core::llm::types::{
+    EmbeddingResult, QueryType, Queryable, RerankDocumentResult, RerankResult,
+};
 
 #[test]
 fn queryable_serializes_with_type_field_lowercase() {

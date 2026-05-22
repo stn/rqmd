@@ -6,7 +6,7 @@
 //! feature keeps the key order matching the TS object literal — this is
 //! load-bearing for cache parity.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::store::cache::get_cache_key;
 

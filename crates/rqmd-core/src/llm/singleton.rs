@@ -42,9 +42,7 @@ pub fn default_llama_cpp() -> Arc<LlamaCpp> {
         Some(existing) => Some(Arc::clone(existing)),
         None => Some(Arc::new(LlamaCpp::with_env())),
     });
-    DEFAULT
-        .load_full()
-        .expect("rcu just stored Some(LlamaCpp)")
+    DEFAULT.load_full().expect("rcu just stored Some(LlamaCpp)")
 }
 
 /// Replace the default instance. Used by tests to inject a

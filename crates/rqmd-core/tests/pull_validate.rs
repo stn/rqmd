@@ -8,7 +8,7 @@ use std::io::Write;
 use tempfile::TempDir;
 
 use rqmd_core::llm::error::Error;
-use rqmd_core::llm::pull::{parse_hf_uri, validate_gguf_file, HfRef};
+use rqmd_core::llm::pull::{HfRef, parse_hf_uri, validate_gguf_file};
 
 // =============================================================================
 // parse_hf_uri

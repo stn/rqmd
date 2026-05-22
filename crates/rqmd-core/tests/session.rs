@@ -108,7 +108,10 @@ async fn max_duration_cancels_session_after_elapsed() {
 
     // Wait a bit more than max_duration for the spawned timer to fire.
     tokio::time::sleep(Duration::from_millis(150)).await;
-    assert!(token.is_cancelled(), "max_duration timer must cancel the token");
+    assert!(
+        token.is_cancelled(),
+        "max_duration timer must cancel the token"
+    );
     assert!(!session.is_valid());
 }
 
@@ -131,18 +134,20 @@ async fn with_llm_session_runs_callback_and_releases_after() {
     .await
     .unwrap();
 
-    assert!(captured_token.is_cancelled(), "session must be released after closure returns");
+    assert!(
+        captured_token.is_cancelled(),
+        "session must be released after closure returns"
+    );
 }
 
 #[tokio::test]
 async fn with_llm_session_propagates_callback_error() {
     let llm = ci_llm();
-    let result: Result<(), Error> = with_llm_session(
-        llm,
-        LlmSessionOptions::default(),
-        |_session| async move { Err(Error::Disposed) },
-    )
-    .await;
+    let result: Result<(), Error> =
+        with_llm_session(llm, LlmSessionOptions::default(), |_session| async move {
+            Err(Error::Disposed)
+        })
+        .await;
     assert!(matches!(result, Err(Error::Disposed)));
 }
 
@@ -152,14 +157,10 @@ async fn with_llm_session_releases_even_when_callback_errors() {
     let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
     let captured_for_closure = captured.clone();
 
-    let _ = with_llm_session(
-        llm,
-        LlmSessionOptions::default(),
-        |session| async move {
-            *captured_for_closure.lock().unwrap() = Some(session.signal().clone());
-            Err::<(), _>(Error::Disposed)
-        },
-    )
+    let _ = with_llm_session(llm, LlmSessionOptions::default(), |session| async move {
+        *captured_for_closure.lock().unwrap() = Some(session.signal().clone());
+        Err::<(), _>(Error::Disposed)
+    })
     .await;
 
     let token = captured.lock().unwrap().take().expect("token captured");

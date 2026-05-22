@@ -81,8 +81,9 @@ async fn rerank_scores_authentication_query_correctly() {
         },
         RerankDocument {
             file: "auth.md".into(),
-            text: "Authentication can be configured by setting the AUTH_SECRET environment variable."
-                .into(),
+            text:
+                "Authentication can be configured by setting the AUTH_SECRET environment variable."
+                    .into(),
             title: None,
         },
         RerankDocument {
@@ -107,9 +108,20 @@ async fn rerank_scores_authentication_query_correctly() {
         .expect("rerank must succeed");
 
     assert_eq!(result.results.len(), 4);
-    let top_two: Vec<&str> = result.results.iter().take(2).map(|r| r.file.as_str()).collect();
-    assert!(top_two.contains(&"auth.md"), "auth.md must rank top-2; got {top_two:?}");
-    assert!(top_two.contains(&"jwt.md"), "jwt.md must rank top-2; got {top_two:?}");
+    let top_two: Vec<&str> = result
+        .results
+        .iter()
+        .take(2)
+        .map(|r| r.file.as_str())
+        .collect();
+    assert!(
+        top_two.contains(&"auth.md"),
+        "auth.md must rank top-2; got {top_two:?}"
+    );
+    assert!(
+        top_two.contains(&"jwt.md"),
+        "jwt.md must rank top-2; got {top_two:?}"
+    );
 
     llm.dispose().await;
 }
@@ -171,7 +183,11 @@ async fn rerank_single_doc_preserves_paths_and_bounds_scores() {
     files.sort_unstable();
     assert_eq!(
         files,
-        vec!["another/path/doc1.md", "deep/nested/path/doc2.md", "doc3.md"]
+        vec![
+            "another/path/doc1.md",
+            "deep/nested/path/doc2.md",
+            "doc3.md"
+        ]
     );
 
     llm.dispose().await;

@@ -39,33 +39,32 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::collections::{Collection, Config, ConfigData};
-use crate::llm::config::{resolve_embed_model, resolve_models, ResolvedModels};
+use crate::llm::config::{ResolvedModels, resolve_embed_model, resolve_models};
 use crate::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use crate::llm::traits::Llm;
 use crate::llm::types::ModelResolutionConfig;
+use crate::store::DEFAULT_MULTI_GET_MAX_BYTES;
+use crate::store::Store;
 use crate::store::cache::clear_cache;
 use crate::store::chunking::ChunkStrategy;
-use crate::store::context::{list_collections as store_list_collections, CollectionListing};
+use crate::store::context::{CollectionListing, list_collections as store_list_collections};
 use crate::store::lookup::{
-    find_document, find_documents, get_document_body, FindDocumentOptions, FindDocumentOutcome,
-    FindDocumentsOptions, FindDocumentsResult,
+    FindDocumentOptions, FindDocumentOutcome, FindDocumentsOptions, FindDocumentsResult,
+    find_document, find_documents, get_document_body,
 };
-use crate::store::reindex::{reindex_collection, ReindexProgress};
-use crate::store::search::{search_fts, SearchResult};
+use crate::store::reindex::{ReindexProgress, reindex_collection};
+use crate::store::search::{SearchResult, search_fts};
 use crate::store::status::{IndexHealthInfo, IndexStatus};
 use crate::store::store_config::{
-    delete_store_collection, get_store_collection, get_store_collections,
+    StoreContextEntry, delete_store_collection, get_store_collection, get_store_collections,
     get_store_contexts, get_store_global_context, remove_store_context, rename_store_collection,
     set_store_global_context, sync_config_to_db, update_store_context, upsert_store_collection,
-    StoreContextEntry,
 };
-use crate::store::Store;
-use crate::store::DEFAULT_MULTI_GET_MAX_BYTES;
 use crate::store_ops::{
+    EmbedOptions, EmbedResult, ExpandedQuery, HybridQueryOptions, HybridQueryResult, SearchHooks,
+    StructuredSearchOptions, VectorSearchOptions, VectorSearchResult,
     expand_query as ops_expand_query, generate_embeddings, hybrid_query, search_vec,
-    structured_search, vector_search_query, EmbedOptions, EmbedResult, ExpandedQuery,
-    HybridQueryOptions, HybridQueryResult, SearchHooks, StructuredSearchOptions,
-    VectorSearchOptions, VectorSearchResult,
+    structured_search, vector_search_query,
 };
 
 // ============================================================================
@@ -667,11 +666,9 @@ impl RqmdStore {
         }
 
         let embed_model = self.resolved_models().embed;
-        result.needs_embedding = self
-            .inner
-            .with_connection(|c| {
-                crate::store::embeddings::get_hashes_needing_embedding(c, None, &embed_model)
-            })?;
+        result.needs_embedding = self.inner.with_connection(|c| {
+            crate::store::embeddings::get_hashes_needing_embedding(c, None, &embed_model)
+        })?;
         Ok(result)
     }
 

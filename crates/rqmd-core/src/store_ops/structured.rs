@@ -9,16 +9,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::store::RERANK_CANDIDATE_LIMIT;
+use crate::store::Store;
 use crate::store::chunking::ChunkStrategy;
 use crate::store::embeddings::search_vec_with_embedding;
-use crate::store::rrf::{
-    build_rrf_trace, reciprocal_rank_fusion, QueryType, RankedListMeta,
-};
+use crate::store::rrf::{QueryType, RankedListMeta, build_rrf_trace, reciprocal_rank_fusion};
 use crate::store::search::{
-    search_fts, validate_lex_query, validate_semantic_query, RankedResult, SearchSource,
+    RankedResult, SearchSource, search_fts, validate_lex_query, validate_semantic_query,
 };
-use crate::store::Store;
-use crate::store::RERANK_CANDIDATE_LIMIT;
 
 use crate::llm::config::{resolve_embed_model, resolve_rerank_model};
 use crate::llm::format::format_query_for_embedding;
@@ -27,8 +25,8 @@ use crate::llm::types::EmbedOptions;
 
 use super::expand::{ExpandedQuery, ExpandedQueryType};
 use super::hybrid::{
-    build_blended_output, build_doc_chunk_map, build_skip_rerank_output, collect_rerank_candidates,
-    has_vector_index, to_ranked, HybridQueryResult, SearchHooks,
+    HybridQueryResult, SearchHooks, build_blended_output, build_doc_chunk_map,
+    build_skip_rerank_output, collect_rerank_candidates, has_vector_index, to_ranked,
 };
 use super::rerank::rerank;
 use super::{Error, Result};
@@ -81,16 +79,12 @@ pub async fn structured_search(
         }
         match s.type_ {
             ExpandedQueryType::Lex => {
-                validate_lex_query(&s.query).map_err(|e| {
-                    Error::InvalidSearch(format!("{location} (lex): {e}"))
-                })?;
+                validate_lex_query(&s.query)
+                    .map_err(|e| Error::InvalidSearch(format!("{location} (lex): {e}")))?;
             }
             ExpandedQueryType::Vec | ExpandedQueryType::Hyde => {
                 validate_semantic_query(&s.query).map_err(|e| {
-                    Error::InvalidSearch(format!(
-                        "{location} ({}): {e}",
-                        type_name(s.type_)
-                    ))
+                    Error::InvalidSearch(format!("{location} ({}): {e}", type_name(s.type_)))
                 })?;
             }
         }
@@ -117,9 +111,8 @@ pub async fn structured_search(
             continue;
         }
         for coll in &collection_iter {
-            let results = store.with_connection(|c| {
-                search_fts(c, &s.query, Some(20), coll.as_deref())
-            })?;
+            let results =
+                store.with_connection(|c| search_fts(c, &s.query, Some(20), coll.as_deref()))?;
             if !results.is_empty() {
                 for r in &results {
                     docid_map.insert(r.doc.filepath.clone(), r.doc.docid.clone());

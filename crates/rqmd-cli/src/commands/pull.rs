@@ -36,7 +36,11 @@ pub async fn run(args: PullArgs, state: &mut IndexState, p: &Palette) -> Result<
         .context("pull failed")?;
 
     for r in results {
-        let note = if r.refreshed { "refreshed" } else { "cached/checked" };
+        let note = if r.refreshed {
+            "refreshed"
+        } else {
+            "cached/checked"
+        };
         println!(
             "{}-{} {} -> {} ({}, {})",
             p.dim(),

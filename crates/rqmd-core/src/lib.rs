@@ -69,9 +69,9 @@ pub mod store;
 pub mod store_ops;
 
 pub use collections::{
-    find_local_config_path, is_valid_collection_name, local_db_path, Collection,
-    CollectionSettings, Config, ConfigData, ContextEntry, ContextMap, Error,
+    Collection, CollectionSettings, Config, ConfigData, ContextEntry, ContextMap, Error,
     IncludeByDefaultField, ModelsConfig, NamedCollectionRef, Result, UpdateField,
+    find_local_config_path, is_valid_collection_name, local_db_path,
 };
 // Note: the crate-root `Error`/`Result` continue to be the
 // `collections::*` ones (matching the existing public API). The
@@ -81,13 +81,12 @@ pub use collections::{
 
 pub use store::Store;
 pub use store::ast::{
-    AstStatus, LangStatus, SupportedLanguage, detect_language, get_ast_break_points,
-    get_ast_status,
+    AstStatus, LangStatus, SupportedLanguage, detect_language, get_ast_break_points, get_ast_status,
 };
 pub use store::chunking::{BreakKind, BreakPoint, Chunk, ChunkStrategy, CodeFenceRegion};
 pub use store::reindex::{ReindexProgress, ReindexResult};
 pub use store::rrf::{
-    HybridQueryExplain, QueryType, RankedListMeta, RRFContributionTrace, RRFExplain, RRFScoreTrace,
+    HybridQueryExplain, QueryType, RRFContributionTrace, RRFExplain, RRFScoreTrace, RankedListMeta,
 };
 pub use store::search::{
     CollectionInfo, DocumentNotFound, DocumentResult, MultiGetResult, RankedResult, SearchResult,
@@ -113,13 +112,12 @@ pub use llm::types::{
 // `llm::types::EmbedOptions` already exported above. Likewise `Error` /
 // `Result`.
 pub use store_ops::{
-    chunk_document_by_tokens, expand_query, generate_embeddings, hybrid_query, rerank,
-    search_vec, structured_search, vector_search_query,
-    EmbedOptions as StoreOpsEmbedOptions, EmbedProgress, EmbedResult,
-    Error as StoreOpsError, ExpandedQuery, ExpandedQueryType,
-    HashForEmbedding, HybridQueryOptions, HybridQueryResult, IndexHealthInfo, IndexStatus,
-    RerankCandidate, RerankScore, Result as StoreOpsResult, SearchHooks, StructuredSearchOptions,
-    TokenChunk, VectorSearchOptions, VectorSearchResult,
+    EmbedOptions as StoreOpsEmbedOptions, EmbedProgress, EmbedResult, Error as StoreOpsError,
+    ExpandedQuery, ExpandedQueryType, HashForEmbedding, HybridQueryOptions, HybridQueryResult,
+    IndexHealthInfo, IndexStatus, RerankCandidate, RerankScore, Result as StoreOpsResult,
+    SearchHooks, StructuredSearchOptions, TokenChunk, VectorSearchOptions, VectorSearchResult,
+    chunk_document_by_tokens, expand_query, generate_embeddings, hybrid_query, rerank, search_vec,
+    structured_search, vector_search_query,
 };
 
 // `RqmdStore`: combines [`Store`], [`LlamaCpp`], and [`Config`] into the
@@ -134,8 +132,8 @@ pub use rqmd_store::{
 // Bench module re-exports (pure scoring + fixture/result types). The runner
 // itself is CLI-only and lives in `rqmd-cli`.
 pub use bench::{
-    normalize_path, paths_match, score_results, BackendResult, BenchmarkFixture, BenchmarkQuery,
-    BenchmarkResult, QueryResult, ScoreMetrics, SummaryStats,
+    BackendResult, BenchmarkFixture, BenchmarkQuery, BenchmarkResult, QueryResult, ScoreMetrics,
+    SummaryStats, normalize_path, paths_match, score_results,
 };
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

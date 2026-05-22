@@ -6,9 +6,9 @@ mod common;
 
 use std::sync::Arc;
 
+use rqmd_core::llm::traits::Llm;
 use rqmd_core::store::chunking::ChunkStrategy;
 use rqmd_core::store_ops::chunk_document_by_tokens;
-use rqmd_core::llm::traits::Llm;
 use tokio_util::sync::CancellationToken;
 
 use common::mock_llm::MockLlm;

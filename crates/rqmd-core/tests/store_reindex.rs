@@ -1,7 +1,7 @@
 //! End-to-end test for `reindex_collection`.
 
-use rqmd_core::store::reindex::reindex_collection;
 use rqmd_core::Store;
+use rqmd_core::store::reindex::reindex_collection;
 use std::fs;
 use tempfile::{NamedTempFile, TempDir};
 

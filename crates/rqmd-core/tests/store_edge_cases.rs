@@ -1,11 +1,11 @@
 //! Store creation + edge-case tests, ported from store.test.ts
 //! `describe("Store Creation")` (WAL mode) and `describe("Edge Cases")`.
 
+use rqmd_core::Store;
 use rqmd_core::store::documents::{hash_content, insert_content, insert_document};
-use rqmd_core::store::lookup::{find_document, FindDocumentOptions, FindDocumentOutcome};
+use rqmd_core::store::lookup::{FindDocumentOptions, FindDocumentOutcome, find_document};
 use rqmd_core::store::path::now_rfc3339;
 use rqmd_core::store::search::search_fts;
-use rqmd_core::Store;
 use tempfile::NamedTempFile;
 
 fn open() -> (NamedTempFile, Store) {

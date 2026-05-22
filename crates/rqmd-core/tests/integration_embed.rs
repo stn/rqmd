@@ -36,7 +36,11 @@ async fn embed_batch_returns_one_vector_per_input_with_consistent_dim() {
         .expect("embed_batch must succeed against the real embed model");
 
     assert_eq!(results.len(), inputs.len());
-    let first_dim = results[0].as_ref().expect("first result Some").embedding.len();
+    let first_dim = results[0]
+        .as_ref()
+        .expect("first result Some")
+        .embedding
+        .len();
     assert!(first_dim > 0, "embedding must be non-empty");
     for (i, slot) in results.iter().enumerate() {
         let r = slot
@@ -190,7 +194,10 @@ async fn embed_batch_matches_individual_embed_calls() {
             .await
             .unwrap()
             .expect("embedding present");
-        let bv = &batch[i].as_ref().expect("batch embedding present").embedding;
+        let bv = &batch[i]
+            .as_ref()
+            .expect("batch embedding present")
+            .embedding;
         assert_eq!(bv.len(), single.embedding.len());
         for (x, y) in bv.iter().zip(single.embedding.iter()) {
             assert!(

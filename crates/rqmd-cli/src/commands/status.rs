@@ -18,7 +18,13 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         .config_mut()?
         .list_all_contexts()
         .into_iter()
-        .map(|e| (e.collection.to_string(), e.path.to_string(), e.context.to_string()))
+        .map(|e| {
+            (
+                e.collection.to_string(),
+                e.path.to_string(),
+                e.context.to_string(),
+            )
+        })
         .collect();
     let yaml_no_update: Vec<String> = state
         .config_mut()?
@@ -31,13 +37,12 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
     let store = state.store_mut()?;
     let collections = store.with_connection(list_collections)?;
 
-    let (total_docs, vector_count, most_recent): (i64, i64, Option<String>) =
-        store.with_connection(|conn| {
-            let total: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM documents WHERE active = 1",
-                [],
-                |r| r.get(0),
-            )?;
+    let (total_docs, vector_count, most_recent): (i64, i64, Option<String>) = store
+        .with_connection(|conn| {
+            let total: i64 =
+                conn.query_row("SELECT COUNT(*) FROM documents WHERE active = 1", [], |r| {
+                    r.get(0)
+                })?;
             let vecs: i64 = conn
                 .query_row("SELECT COUNT(*) FROM content_vectors", [], |r| r.get(0))
                 .unwrap_or(0);
@@ -100,7 +105,12 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
                 coll.name,
                 p.reset()
             );
-            println!("    {}Pattern:{}  {}", p.dim(), p.reset(), coll.glob_pattern);
+            println!(
+                "    {}Pattern:{}  {}",
+                p.dim(),
+                p.reset(),
+                coll.glob_pattern
+            );
             println!(
                 "    {}Files:{}    {} (updated {last_mod})",
                 p.dim(),
@@ -152,7 +162,12 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         .collect();
     let mut tips: Vec<String> = Vec::new();
     if !collections_without_context.is_empty() {
-        let head = collections_without_context.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        let head = collections_without_context
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         let more = if collections_without_context.len() > 3 {
             format!(" +{} more", collections_without_context.len() - 3)
         } else {
@@ -168,7 +183,12 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         ));
     }
     if !yaml_no_update.is_empty() && collections.len() > 1 {
-        let head = yaml_no_update.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        let head = yaml_no_update
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         let more = if yaml_no_update.len() > 3 {
             format!(" +{} more", yaml_no_update.len() - 3)
         } else {

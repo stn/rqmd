@@ -7,16 +7,18 @@ use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use rqmd_core::Store;
 use rqmd_core::llm::traits::Llm;
 use rqmd_core::store::virtual_path::resolve_virtual_path;
-use rqmd_core::store_ops::{vector_search_query, ExpandedQuery, SearchHooks, VectorSearchOptions};
-use rqmd_core::Store;
+use rqmd_core::store_ops::{ExpandedQuery, SearchHooks, VectorSearchOptions, vector_search_query};
 
 use crate::cli::VsearchArgs;
-use crate::collection_filter::{filter_by_collections, resolve_collection_filter, single_collection};
+use crate::collection_filter::{
+    filter_by_collections, resolve_collection_filter, single_collection,
+};
 use crate::color::Palette;
 use crate::output::OutputFormat;
-use crate::search_view::{editor_uri_template, print_hits, vector_result_to_hit, CliLinkCtx};
+use crate::search_view::{CliLinkCtx, editor_uri_template, print_hits, vector_result_to_hit};
 use crate::state::IndexState;
 
 pub async fn run(args: VsearchArgs, state: &mut IndexState, p: &Palette) -> Result<()> {

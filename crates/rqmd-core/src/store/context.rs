@@ -5,15 +5,15 @@
 //! context). The resolver joins every matching prefix — shortest first —
 //! with double newlines.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
+use super::Result;
 use super::store_config::{
     delete_store_collection, get_store_collection, get_store_collections, get_store_contexts,
     get_store_global_context, remove_store_context, rename_store_collection,
     set_store_global_context, update_store_context,
 };
 use super::virtual_path::parse_virtual_path;
-use super::Result;
 
 /// Get the context for a virtual `(collection, relative path)`.
 pub fn get_context_for_path(

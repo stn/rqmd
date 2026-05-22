@@ -4,11 +4,11 @@
 //! Resolution is fully handled by `rqmd_core::store::lookup::find_documents`.
 
 use anyhow::Result;
-use rqmd_core::store::lookup::{find_documents, FindDocumentsOptions};
 use rqmd_core::store::DEFAULT_MULTI_GET_MAX_BYTES;
+use rqmd_core::store::lookup::{FindDocumentsOptions, find_documents};
 
 use crate::cli::MultiGetArgs;
-use crate::output::{write_multi_get, OutputFormat};
+use crate::output::{OutputFormat, write_multi_get};
 use crate::state::IndexState;
 
 pub fn run(a: MultiGetArgs, state: &mut IndexState) -> Result<()> {

@@ -9,10 +9,10 @@
 use serial_test::serial;
 
 use rqmd_core::llm::config::{
-    resolve_embed_context_size, resolve_embed_model, resolve_expand_context_size,
-    resolve_generate_model, resolve_models, resolve_rerank_context_size, resolve_rerank_model,
     DEFAULT_EMBED_CONTEXT_SIZE, DEFAULT_EMBED_MODEL, DEFAULT_EXPAND_CONTEXT_SIZE,
     DEFAULT_GENERATE_MODEL, DEFAULT_RERANK_CONTEXT_SIZE, DEFAULT_RERANK_MODEL,
+    resolve_embed_context_size, resolve_embed_model, resolve_expand_context_size,
+    resolve_generate_model, resolve_models, resolve_rerank_context_size, resolve_rerank_model,
 };
 use rqmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rqmd_core::llm::types::ModelResolutionConfig;

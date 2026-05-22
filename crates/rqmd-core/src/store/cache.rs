@@ -5,11 +5,11 @@
 //! has a typed surface ready for the LLM port. The unit test below also
 //! exercises the table to prove [`super::schema::initialize`] created it.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
-use super::path::now_rfc3339;
 use super::Result;
+use super::path::now_rfc3339;
 
 /// Compute the cache key for an `(url, body)` pair. Hex-encoded SHA-256.
 /// Mirrors `getCacheKey` (`store.ts:2024–2029`) **byte for byte** — `url`

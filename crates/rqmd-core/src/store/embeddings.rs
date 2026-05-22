@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use super::context::get_context_for_file;
 use super::docid::get_docid;
@@ -286,9 +286,10 @@ pub fn get_embedding_docs_for_batch(
     let sql = format!("SELECT hash, doc AS body FROM content WHERE hash IN ({placeholders})");
     let mut stmt = conn.prepare(&sql)?;
     let body_by_hash: HashMap<String, String> = stmt
-        .query_map(params_from_iter(batch.iter().map(|d| d.hash.as_str())), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
+        .query_map(
+            params_from_iter(batch.iter().map(|d| d.hash.as_str())),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -335,7 +336,10 @@ pub fn insert_embedding(
         params![hash, seq, pos, model, total_chunks, embedded_at],
     )?;
 
-    conn.execute("DELETE FROM vectors_vec WHERE hash_seq = ?", params![hash_seq])?;
+    conn.execute(
+        "DELETE FROM vectors_vec WHERE hash_seq = ?",
+        params![hash_seq],
+    )?;
     let blob: &[u8] = bytemuck::cast_slice(embedding);
     conn.execute(
         "INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)",
@@ -393,12 +397,12 @@ pub fn clear_all_embeddings(conn: &Connection, collection: Option<&str>) -> Resu
         }
     }
 
-    let delete_sql = format!(
-        "DELETE FROM content_vectors WHERE hash IN ({EXCLUSIVE_HASHES_SUBQUERY})"
-    );
+    let delete_sql =
+        format!("DELETE FROM content_vectors WHERE hash IN ({EXCLUSIVE_HASHES_SUBQUERY})");
     conn.execute(&delete_sql, params![collection])?;
 
-    let remaining: i64 = conn.query_row("SELECT COUNT(*) FROM content_vectors", [], |r| r.get(0))?;
+    let remaining: i64 =
+        conn.query_row("SELECT COUNT(*) FROM content_vectors", [], |r| r.get(0))?;
     if remaining == 0 {
         conn.execute("DROP TABLE IF EXISTS vectors_vec", [])?;
     }
@@ -467,9 +471,8 @@ pub fn search_vec_with_embedding(
     // Step 1: kNN on vec0 alone (NO JOINs — vec0 hangs otherwise; TS 3259-3262).
     let k = limit.saturating_mul(3).clamp(1, 1000) as i64;
     let blob: &[u8] = bytemuck::cast_slice(embedding);
-    let mut step1 = conn.prepare(
-        "SELECT hash_seq, distance FROM vectors_vec WHERE embedding MATCH ? AND k = ?",
-    )?;
+    let mut step1 = conn
+        .prepare("SELECT hash_seq, distance FROM vectors_vec WHERE embedding MATCH ? AND k = ?")?;
     let vec_rows: Vec<(String, f64)> = step1
         .query_map(params![blob, k], |row| Ok((row.get(0)?, row.get(1)?)))?
         .filter_map(|r| r.ok())
@@ -547,7 +550,10 @@ pub fn search_vec_with_embedding(
     }
     let mut seen: HashMap<String, Best> = HashMap::new();
     for row in doc_rows {
-        let distance = distance_by_hash_seq.get(&row.hash_seq).copied().unwrap_or(1.0);
+        let distance = distance_by_hash_seq
+            .get(&row.hash_seq)
+            .copied()
+            .unwrap_or(1.0);
         let key = row.filepath.clone();
         match seen.get_mut(&key) {
             Some(existing) if existing.distance <= distance => {}
@@ -558,7 +564,11 @@ pub fn search_vec_with_embedding(
     }
 
     let mut ordered: Vec<Best> = seen.into_values().collect();
-    ordered.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+    ordered.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     ordered.truncate(limit);
 
     let results = ordered
@@ -862,11 +872,22 @@ mod tests {
 
         // Two chunks for doc a — one very close to the query, one farther.
         insert_embedding(&store.conn, "ha", 0, 0, &[1.0, 0.0, 0.0, 0.0], "m", "ts", 2).unwrap();
-        insert_embedding(&store.conn, "ha", 1, 10, &[0.0, 1.0, 0.0, 0.0], "m", "ts", 2).unwrap();
+        insert_embedding(
+            &store.conn,
+            "ha",
+            1,
+            10,
+            &[0.0, 1.0, 0.0, 0.0],
+            "m",
+            "ts",
+            2,
+        )
+        .unwrap();
         // Doc b — moderate distance.
         insert_embedding(&store.conn, "hb", 0, 0, &[0.5, 0.5, 0.0, 0.0], "m", "ts", 1).unwrap();
 
-        let results = search_vec_with_embedding(&store.conn, &[1.0, 0.0, 0.0, 0.0], 5, None).unwrap();
+        let results =
+            search_vec_with_embedding(&store.conn, &[1.0, 0.0, 0.0, 0.0], 5, None).unwrap();
         assert_eq!(results.len(), 2);
         // Doc a should appear once (chunk 0, closest), and rank first.
         assert!(results[0].doc.filepath.ends_with("/a.md"));

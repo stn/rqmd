@@ -17,8 +17,8 @@
 //! runtime "try CUDA, fail, cache, fall back to CPU" path to keep off stdout
 //! or to warn about once-per-process (see `rqmd_core::llm::gpu`).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rqmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rqmd_core::llm::traits::Llm;

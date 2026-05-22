@@ -10,15 +10,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::store::chunking::{chunk_document, Chunk, ChunkStrategy};
+use crate::store::Store;
+use crate::store::chunking::{Chunk, ChunkStrategy, chunk_document};
 use crate::store::embeddings::search_vec_with_embedding;
 use crate::store::rrf::{
-    build_rrf_trace, reciprocal_rank_fusion, HybridQueryExplain, QueryType, RankedListMeta,
-    RRFExplain, RRFScoreTrace,
+    HybridQueryExplain, QueryType, RRFExplain, RRFScoreTrace, RankedListMeta, build_rrf_trace,
+    reciprocal_rank_fusion,
 };
-use crate::store::search::{search_fts, RankedResult, SearchResult, SearchSource};
+use crate::store::search::{RankedResult, SearchResult, SearchSource, search_fts};
 use crate::store::snippet::extract_intent_terms;
-use crate::store::Store;
 use crate::store::{
     INTENT_WEIGHT_CHUNK, RERANK_CANDIDATE_LIMIT, STRONG_SIGNAL_MIN_GAP, STRONG_SIGNAL_MIN_SCORE,
 };
@@ -28,9 +28,9 @@ use crate::llm::format::format_query_for_embedding;
 use crate::llm::traits::Llm;
 use crate::llm::types::EmbedOptions;
 
-use super::expand::{expand_query, ExpandedQuery, ExpandedQueryType};
-use super::rerank::{rerank, RerankCandidate};
 use super::Result;
+use super::expand::{ExpandedQuery, ExpandedQueryType, expand_query};
+use super::rerank::{RerankCandidate, rerank};
 
 /// Callback hooks for hybrid / vector / structured pipelines. Each is
 /// optional; `None` is a no-op.
@@ -380,7 +380,10 @@ pub(super) fn build_doc_chunk_map(
         let mut best_score = -1.0_f64;
         for (i, c) in chunks.iter().enumerate() {
             let lower = c.text.to_lowercase();
-            let mut score = query_terms.iter().filter(|t| lower.contains(t.as_str())).count() as f64;
+            let mut score = query_terms
+                .iter()
+                .filter(|t| lower.contains(t.as_str()))
+                .count() as f64;
             for t in &intent_terms {
                 if lower.contains(t) {
                     score += INTENT_WEIGHT_CHUNK;
@@ -434,8 +437,11 @@ pub(super) fn build_blended_output(
             let rrf_score = 1.0 / rank as f64;
             let blended_score = rrf_weight * rrf_score + (1.0 - rrf_weight) * r.score as f64;
             let candidate = candidate_meta.get(r.file.as_str());
-            let (best_chunk, best_pos) =
-                best_chunk_for(r.file.as_str(), doc_chunk_map, candidate.map(|c| c.body.as_str()));
+            let (best_chunk, best_pos) = best_chunk_for(
+                r.file.as_str(),
+                doc_chunk_map,
+                candidate.map(|c| c.body.as_str()),
+            );
             HybridQueryResult {
                 file: r.file.clone(),
                 display_path: candidate
@@ -599,8 +605,14 @@ mod tests {
             .collect();
         let intent_terms = intent.map(extract_intent_terms).unwrap_or_default();
         let lower = text.to_lowercase();
-        let q_score = query_terms.iter().filter(|t| lower.contains(t.as_str())).count() as f64;
-        let i_score = intent_terms.iter().filter(|t| lower.contains(t.as_str())).count() as f64
+        let q_score = query_terms
+            .iter()
+            .filter(|t| lower.contains(t.as_str()))
+            .count() as f64;
+        let i_score = intent_terms
+            .iter()
+            .filter(|t| lower.contains(t.as_str()))
+            .count() as f64
             * INTENT_WEIGHT_CHUNK;
         q_score + i_score
     }
@@ -616,7 +628,10 @@ mod tests {
     #[test]
     fn chunk_score_without_intent_all_equal() {
         let chunks = scoring_chunks();
-        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "performance", None)).collect();
+        let scores: Vec<f64> = chunks
+            .iter()
+            .map(|c| score_chunk(c, "performance", None))
+            .collect();
         // All contain "performance", so all score 1.0.
         assert_eq!(scores[0], scores[1]);
         assert_eq!(scores[1], scores[2]);
@@ -626,7 +641,10 @@ mod tests {
     fn chunk_score_web_intent_web_highest() {
         let chunks = scoring_chunks();
         let intent = "looking for notes about page load times and latency optimization";
-        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "performance", Some(intent))).collect();
+        let scores: Vec<f64> = chunks
+            .iter()
+            .map(|c| score_chunk(c, "performance", Some(intent)))
+            .collect();
         assert!(scores[0] > scores[1]);
         assert!(scores[0] > scores[2]);
     }
@@ -635,7 +653,10 @@ mod tests {
     fn chunk_score_health_intent_health_highest() {
         let chunks = scoring_chunks();
         let intent = "looking for notes about exercise, sleep, and endurance";
-        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "performance", Some(intent))).collect();
+        let scores: Vec<f64> = chunks
+            .iter()
+            .map(|c| score_chunk(c, "performance", Some(intent)))
+            .collect();
         assert!(scores[2] > scores[0]);
         assert!(scores[2] > scores[1]);
     }
@@ -657,7 +678,10 @@ mod tests {
         // chunk 0 has "web" + "performance" → 2 intent hits; chunks 1,2 have
         // "performance" only → 1 intent hit. Query "test" matches nothing.
         let intent = "the art of web performance";
-        let scores: Vec<f64> = chunks.iter().map(|c| score_chunk(c, "test", Some(intent))).collect();
+        let scores: Vec<f64> = chunks
+            .iter()
+            .map(|c| score_chunk(c, "test", Some(intent)))
+            .collect();
         assert_eq!(scores[0], INTENT_WEIGHT_CHUNK * 2.0); // "web" + "performance"
         assert_eq!(scores[1], INTENT_WEIGHT_CHUNK); // "performance" only
         assert_eq!(scores[2], INTENT_WEIGHT_CHUNK); // "performance" only
@@ -683,7 +707,11 @@ mod tests {
 
     #[test]
     fn strong_signal_bypassed_when_intent_provided() {
-        assert!(!has_strong_signal(0.90, 0.70, Some("looking for health performance")));
+        assert!(!has_strong_signal(
+            0.90,
+            0.70,
+            Some("looking for health performance")
+        ));
     }
 
     #[test]

@@ -11,17 +11,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::store::embeddings::search_vec_with_embedding;
 use crate::store::Store;
+use crate::store::embeddings::search_vec_with_embedding;
 
 use crate::llm::config::resolve_embed_model;
 use crate::llm::format::format_query_for_embedding;
 use crate::llm::traits::Llm;
 use crate::llm::types::EmbedOptions;
 
-use super::expand::{expand_query, ExpandedQuery, ExpandedQueryType};
-use super::hybrid::{has_vector_index, SearchHooks};
 use super::Result;
+use super::expand::{ExpandedQuery, ExpandedQueryType, expand_query};
+use super::hybrid::{SearchHooks, has_vector_index};
 
 #[derive(Debug, Default, Clone)]
 pub struct VectorSearchOptions {
@@ -102,8 +102,8 @@ pub async fn vector_search_query(
         let Some(Some(emb)) = embeddings.get(i) else {
             continue;
         };
-        let results =
-            store.with_connection(|c| search_vec_with_embedding(c, &emb.embedding, limit, collection))?;
+        let results = store
+            .with_connection(|c| search_vec_with_embedding(c, &emb.embedding, limit, collection))?;
         for r in results {
             let body = r.doc.body.clone().unwrap_or_default();
             let entry = accum
@@ -125,5 +125,9 @@ pub async fn vector_search_query(
 
     let mut out: Vec<VectorSearchResult> = accum.into_values().collect();
     out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
-    Ok(out.into_iter().filter(|r| r.score >= min_score).take(limit).collect())
+    Ok(out
+        .into_iter()
+        .filter(|r| r.score >= min_score)
+        .take(limit)
+        .collect())
 }

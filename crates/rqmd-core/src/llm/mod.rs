@@ -16,13 +16,13 @@ pub mod config;
 pub mod error;
 pub mod format;
 pub mod gpu;
+pub mod llama_cpp;
 pub mod prompt;
 pub mod pull;
-pub mod types;
-pub mod llama_cpp;
 pub mod session;
 pub mod singleton;
 pub mod traits;
+pub mod types;
 pub mod worker;
 
 // Module-level convenience re-exports (mirrors the old `llm.ts` exports).

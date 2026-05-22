@@ -9,7 +9,7 @@
 //! single source of truth that is unit-testable.
 
 use rqmd_core::store::search::{DocumentResult, MultiGetResult};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::cli::FormatFlags;
 

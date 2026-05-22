@@ -14,7 +14,7 @@ use rqmd_core::store::virtual_path::{build_virtual_path, parse_virtual_path};
 use rqmd_core::store_ops::{HybridQueryResult, VectorSearchResult};
 
 use crate::color::Palette;
-use crate::output::{escape_csv, escape_xml, OutputFormat};
+use crate::output::{OutputFormat, escape_csv, escape_xml};
 
 /// Build a `qmd://` URI from a bare `collection/path` display path, appending
 /// `?index=<name>` only for a non-default index. Mirrors qmd's `toQmdPath`
@@ -1013,9 +1013,11 @@ mod tests {
 
     #[test]
     fn format_search_results_json_includes_context() {
-        assert!(serde_json::to_string(&ctx_hits())
-            .unwrap()
-            .contains(TEST_CONTEXT));
+        assert!(
+            serde_json::to_string(&ctx_hits())
+                .unwrap()
+                .contains(TEST_CONTEXT)
+        );
     }
 
     #[test]

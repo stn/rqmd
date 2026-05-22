@@ -5,7 +5,7 @@
 //! scoped to the default collections (`includeByDefault !== false`) rather
 //! than every collection; explicit names are validated up front.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use rqmd_core::collections::Config;
 
 /// Port of `resolveCollectionFilter(raw, useDefaults)` (qmd.ts:2272).
@@ -223,9 +223,11 @@ mod tests {
     #[test]
     fn resolve_empty_without_defaults_is_empty() {
         let (_tmp, config) = config_with_collections();
-        assert!(resolve_collection_filter(&config, &[], false)
-            .unwrap()
-            .is_empty());
+        assert!(
+            resolve_collection_filter(&config, &[], false)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

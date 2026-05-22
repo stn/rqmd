@@ -3,16 +3,16 @@
 //! find_document, get_document_body, find_documents (multi-get),
 //! find_similar_files, match_files_by_glob.
 
+use rqmd_core::Store;
 use rqmd_core::collections::Collection;
 use rqmd_core::store::documents::{hash_content, insert_content, insert_document};
 use rqmd_core::store::lookup::{
-    find_document, find_documents, find_similar_files, get_document_body, match_files_by_glob,
-    FindDocumentOptions, FindDocumentOutcome, FindDocumentsOptions,
+    FindDocumentOptions, FindDocumentOutcome, FindDocumentsOptions, find_document, find_documents,
+    find_similar_files, get_document_body, match_files_by_glob,
 };
 use rqmd_core::store::path::{homedir, now_rfc3339};
 use rqmd_core::store::search::MultiGetResult;
 use rqmd_core::store::store_config::upsert_store_collection;
-use rqmd_core::Store;
 use tempfile::NamedTempFile;
 
 fn open() -> (NamedTempFile, Store) {
@@ -397,9 +397,11 @@ fn match_files_by_glob_matches_patterns() {
         .with_connection(|c| match_files_by_glob(c, "journals/*.md"))
         .unwrap();
     assert_eq!(matches.len(), 2);
-    assert!(matches
-        .iter()
-        .all(|m| m.display_path.starts_with("journals/")));
+    assert!(
+        matches
+            .iter()
+            .all(|m| m.display_path.starts_with("journals/"))
+    );
 }
 
 #[test]

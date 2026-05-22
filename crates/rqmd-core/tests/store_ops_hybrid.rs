@@ -7,16 +7,16 @@ mod common;
 use std::sync::Arc;
 
 use rqmd_core::db::rusqlite::params;
+use rqmd_core::llm::traits::Llm;
+use rqmd_core::llm::types::{QueryType, Queryable};
+use rqmd_core::store::Store;
 use rqmd_core::store::documents::{hash_content, insert_content, insert_document};
 use rqmd_core::store::embeddings::{ensure_vec_table, insert_embedding};
 use rqmd_core::store::path::now_rfc3339;
-use rqmd_core::store::Store;
 use rqmd_core::store_ops::{
-    hybrid_query, structured_search, vector_search_query, ExpandedQuery, ExpandedQueryType,
-    HybridQueryOptions, StructuredSearchOptions, VectorSearchOptions,
+    ExpandedQuery, ExpandedQueryType, HybridQueryOptions, StructuredSearchOptions,
+    VectorSearchOptions, hybrid_query, structured_search, vector_search_query,
 };
-use rqmd_core::llm::traits::Llm;
-use rqmd_core::llm::types::{QueryType, Queryable};
 use tempfile::NamedTempFile;
 
 use common::mock_llm::MockLlm;
@@ -90,7 +90,11 @@ async fn hybrid_query_returns_fts_relevant_doc_with_strong_signal() {
     };
     let r = hybrid_query(&store, llm, "alpha", opts).await.unwrap();
     assert!(!r.is_empty(), "expected at least one result");
-    assert!(r[0].file.ends_with("/a.md"), "top doc should be alpha; got {}", r[0].file);
+    assert!(
+        r[0].file.ends_with("/a.md"),
+        "top doc should be alpha; got {}",
+        r[0].file
+    );
 }
 
 #[tokio::test]
@@ -109,7 +113,10 @@ async fn hybrid_query_skip_rerank_returns_rrf_scored_results() {
     // RRF top score for rank=1 is 1/1 = 1.0.
     assert!((r[0].score - 1.0).abs() < 1e-9);
     // rerank_calls should be zero.
-    assert_eq!(mock.rerank_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert_eq!(
+        mock.rerank_calls.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
 }
 
 #[tokio::test]
@@ -256,7 +263,9 @@ async fn vector_search_query_drops_lex_expansions() {
         min_score: Some(0.0),
         ..Default::default()
     };
-    let r = vector_search_query(&store, llm, "alpha", opts).await.unwrap();
+    let r = vector_search_query(&store, llm, "alpha", opts)
+        .await
+        .unwrap();
     assert!(!r.is_empty());
     assert!(r[0].file.ends_with("/a.md"));
     // embed_batch should have been called with TWO texts (original + vec).
@@ -316,7 +325,9 @@ async fn structured_search_first_list_gets_2x_weight() {
         skip_rerank: true,
         ..Default::default()
     };
-    let r = structured_search(&store, llm, &searches, opts).await.unwrap();
+    let r = structured_search(&store, llm, &searches, opts)
+        .await
+        .unwrap();
     assert!(r.len() >= 2);
     let alpha_idx = r.iter().position(|h| h.file.ends_with("/a.md")).unwrap();
     let gamma_idx = r.iter().position(|h| h.file.ends_with("/g.md")).unwrap();
@@ -394,7 +405,9 @@ async fn structured_search_respects_limit_option() {
         skip_rerank: true,
         ..Default::default()
     };
-    let r = structured_search(&store, llm, &searches, opts).await.unwrap();
+    let r = structured_search(&store, llm, &searches, opts)
+        .await
+        .unwrap();
     assert!(r.len() <= 5);
 }
 
@@ -416,8 +429,13 @@ async fn structured_search_respects_min_score_option() {
         skip_rerank: true,
         ..Default::default()
     };
-    let r = structured_search(&store, llm, &searches, opts).await.unwrap();
-    assert!(!r.is_empty(), "expected at least one hit above the score floor");
+    let r = structured_search(&store, llm, &searches, opts)
+        .await
+        .unwrap();
+    assert!(
+        !r.is_empty(),
+        "expected at least one hit above the score floor"
+    );
     for hit in &r {
         assert!(hit.score >= 0.5, "score {} below floor", hit.score);
     }

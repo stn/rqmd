@@ -2,13 +2,13 @@
 //! from store.test.ts `describe("Path Context")` and the hierarchical-context
 //! case of `describe("findDocument")`.
 
+use rqmd_core::Store;
 use rqmd_core::collections::Collection;
 use rqmd_core::store::context::{get_context_for_file, insert_context};
 use rqmd_core::store::documents::{hash_content, insert_content, insert_document};
-use rqmd_core::store::lookup::{find_document, FindDocumentOptions, FindDocumentOutcome};
+use rqmd_core::store::lookup::{FindDocumentOptions, FindDocumentOutcome, find_document};
 use rqmd_core::store::path::now_rfc3339;
 use rqmd_core::store::store_config::{set_store_global_context, upsert_store_collection};
-use rqmd_core::Store;
 use tempfile::NamedTempFile;
 
 fn open() -> (NamedTempFile, Store) {

@@ -62,7 +62,12 @@ async fn seed_store(dir: &Path) -> RqmdStore {
     // 300 pad lines push the marker past the first chunk boundary; the marker
     // sits on absolute line 301.
     let pad = "Pad line for chunk boundary coverage\n";
-    let abs = format!("{}{}{}", pad.repeat(300), "UNIQUE_KEYWORD_XYZ marker\n", pad.repeat(20));
+    let abs = format!(
+        "{}{}{}",
+        pad.repeat(300),
+        "UNIQUE_KEYWORD_XYZ marker\n",
+        pad.repeat(20)
+    );
     std::fs::write(fixtures.join("absolute-line-fixture.md"), abs).unwrap();
 
     let mut store = RqmdStore::open(RqmdStoreOptions {
@@ -186,7 +191,10 @@ async fn query_lex(mcp: &Mcp, q: &str) -> CallToolResult {
 async fn read(mcp: &Mcp, uri: &str) -> ReadResourceResult {
     let params: rmcp::model::ReadResourceRequestParams =
         serde_json::from_value(json!({ "uri": uri })).unwrap();
-    mcp.client.read_resource(params).await.expect("read resource")
+    mcp.client
+        .read_resource(params)
+        .await
+        .expect("read resource")
 }
 
 /// `structuredContent.results` as a JSON array.
@@ -241,10 +249,7 @@ async fn stdio_protocol_roundtrip() {
     let server = QmdMcpServer::new(seed_store(tmp.path()).await);
 
     let (server_io, client_io) = tokio::io::duplex(64 * 1024);
-    let (srv, cli) = tokio::join!(
-        serve_server(server, server_io),
-        serve_client((), client_io),
-    );
+    let (srv, cli) = tokio::join!(serve_server(server, server_io), serve_client((), client_io),);
     let _server = srv.expect("server initialized");
     let client = cli.expect("client initialized");
 
@@ -277,7 +282,10 @@ async fn stdio_protocol_roundtrip() {
     );
 
     // --- status (pure SQL) ---
-    let status = client.call_tool(call("status", json!({}))).await.expect("status");
+    let status = client
+        .call_tool(call("status", json!({})))
+        .await
+        .expect("status");
     let sc = status.structured_content.expect("status structuredContent");
     assert!(sc["totalDocuments"].as_i64().unwrap() >= 5);
     assert_eq!(sc["hasVectorIndex"], false); // no embeddings generated
@@ -348,7 +356,12 @@ async fn http_health_query_and_404() {
     // GET /health -> 200 { status: "ok", uptime: <number> }
     let resp = app
         .clone()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -360,13 +373,19 @@ async fn http_health_query_and_404() {
     // GET /other -> 404
     let resp = app
         .clone()
-        .oneshot(Request::builder().uri("/other").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/other")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // POST /query -> { results: [...] }
-    let body = serde_json::to_vec(&json!({ "searches": [{ "type": "lex", "query": "readme" }] })).unwrap();
+    let body =
+        serde_json::to_vec(&json!({ "searches": [{ "type": "lex", "query": "readme" }] })).unwrap();
     let resp = app
         .clone()
         .oneshot(
@@ -420,7 +439,9 @@ async fn http_mcp_streamable_roundtrip() {
 
     // Bind before spawning so the OS accept queue exists before the client
     // connects — no connect race even if the serve task hasn't been polled yet.
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let addr = listener.local_addr().unwrap();
     let server_task = tokio::spawn(async move {
         // Runs until the test aborts the task; ignore the result so an abort at
@@ -443,7 +464,10 @@ async fn http_mcp_streamable_roundtrip() {
     }
 
     // --- status (pure SQL) ---
-    let status = client.call_tool(call("status", json!({}))).await.expect("status");
+    let status = client
+        .call_tool(call("status", json!({})))
+        .await
+        .expect("status");
     let sc = status.structured_content.expect("status structuredContent");
     assert!(sc["totalDocuments"].as_i64().unwrap() >= 5);
 
@@ -600,7 +624,12 @@ async fn get_by_display_path() {
     assert_eq!(r.is_error, Some(false));
     let b = block(&r, 0);
     assert_eq!(b["type"], "resource");
-    assert!(b["resource"]["text"].as_str().unwrap().contains("Project README"));
+    assert!(
+        b["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Project README")
+    );
     assert_eq!(b["resource"]["uri"], "qmd://docs/readme.md");
     mcp.shutdown().await;
 }
@@ -610,7 +639,12 @@ async fn get_by_collection_relative_path() {
     let mcp = connect().await;
     let r = get(&mcp, json!({ "file": "readme.md" })).await;
     assert_eq!(r.is_error, Some(false));
-    assert!(block(&r, 0)["resource"]["text"].as_str().unwrap().contains("Project README"));
+    assert!(
+        block(&r, 0)["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Project README")
+    );
     mcp.shutdown().await;
 }
 
@@ -619,7 +653,12 @@ async fn get_by_partial_path() {
     let mcp = connect().await;
     let r = get(&mcp, json!({ "file": "api.md" })).await;
     assert_eq!(r.is_error, Some(false));
-    assert!(block(&r, 0)["resource"]["text"].as_str().unwrap().contains("API Documentation"));
+    assert!(
+        block(&r, 0)["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("API Documentation")
+    );
     mcp.shutdown().await;
 }
 
@@ -629,7 +668,12 @@ async fn get_by_absolute_path() {
     let abs = mcp.tmp.path().join("docs").join("api.md");
     let r = get(&mcp, json!({ "file": abs.to_string_lossy() })).await;
     assert_eq!(r.is_error, Some(false));
-    assert!(block(&r, 0)["resource"]["text"].as_str().unwrap().contains("API Documentation"));
+    assert!(
+        block(&r, 0)["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("API Documentation")
+    );
     mcp.shutdown().await;
 }
 
@@ -658,7 +702,12 @@ async fn get_supports_line_suffix() {
     let mcp = connect().await;
     let r = get(&mcp, json!({ "file": "readme.md:2" })).await;
     assert_eq!(r.is_error, Some(false));
-    assert!(!block(&r, 0)["resource"]["text"].as_str().unwrap().contains("# Project README"));
+    assert!(
+        !block(&r, 0)["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("# Project README")
+    );
     mcp.shutdown().await;
 }
 
@@ -667,7 +716,12 @@ async fn get_supports_from_line() {
     let mcp = connect().await;
     let r = get(&mcp, json!({ "file": "readme.md", "fromLine": 3 })).await;
     assert_eq!(r.is_error, Some(false));
-    assert!(!block(&r, 0)["resource"]["text"].as_str().unwrap().contains("# Project README"));
+    assert!(
+        !block(&r, 0)["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("# Project README")
+    );
     mcp.shutdown().await;
 }
 
@@ -676,8 +730,14 @@ async fn get_supports_max_lines() {
     let mcp = connect().await;
     let r = get(&mcp, json!({ "file": "api.md", "maxLines": 3 })).await;
     assert_eq!(r.is_error, Some(false));
-    let text = block(&r, 0)["resource"]["text"].as_str().unwrap().to_string();
-    assert!(text.lines().count() <= 3, "expected <= 3 lines, got:\n{text}");
+    let text = block(&r, 0)["resource"]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        text.lines().count() <= 3,
+        "expected <= 3 lines, got:\n{text}"
+    );
     mcp.shutdown().await;
 }
 
@@ -700,7 +760,10 @@ async fn get_includes_context() {
 // ============================================================================
 
 async fn multi_get(mcp: &Mcp, args: Value) -> CallToolResult {
-    mcp.client.call_tool(call("multi_get", args)).await.expect("multi_get")
+    mcp.client
+        .call_tool(call("multi_get", args))
+        .await
+        .expect("multi_get")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -748,7 +811,10 @@ async fn multi_get_respects_max_lines() {
     assert_eq!(blocks.len(), 1);
     let text = blocks[0]["resource"]["text"].as_str().unwrap();
     assert!(text.contains("# Project README"));
-    assert!(!text.contains("This is the main readme"), "body past line 2 not truncated:\n{text}");
+    assert!(
+        !text.contains("This is the main readme"),
+        "body past line 2 not truncated:\n{text}"
+    );
     mcp.shutdown().await;
 }
 
@@ -768,7 +834,12 @@ async fn multi_get_includes_context() {
     let r = multi_get(&mcp, json!({ "pattern": "meetings/meeting-2024-01.md" })).await;
     let blocks = resource_blocks(&r);
     assert_eq!(blocks.len(), 1);
-    assert!(blocks[0]["resource"]["text"].as_str().unwrap().contains("<!-- Context:"));
+    assert!(
+        blocks[0]["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- Context:")
+    );
     mcp.shutdown().await;
 }
 
@@ -779,20 +850,34 @@ async fn multi_get_includes_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn status_returns_index_status() {
     let mcp = connect().await;
-    let r = mcp.client.call_tool(call("status", json!({}))).await.expect("status");
+    let r = mcp
+        .client
+        .call_tool(call("status", json!({})))
+        .await
+        .expect("status");
     let sc = r.structured_content.as_ref().expect("structuredContent");
     assert_eq!(sc["totalDocuments"].as_i64().unwrap(), SEEDED_DOCS);
     assert_eq!(sc["hasVectorIndex"], false);
     let cols = sc["collections"].as_array().unwrap();
     assert_eq!(cols.len(), 1);
-    assert!(cols[0]["path"].as_str().unwrap().replace('\\', "/").ends_with("docs"));
+    assert!(
+        cols[0]["path"]
+            .as_str()
+            .unwrap()
+            .replace('\\', "/")
+            .ends_with("docs")
+    );
     mcp.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn status_shows_documents_needing_embedding() {
     let mcp = connect().await;
-    let r = mcp.client.call_tool(call("status", json!({}))).await.expect("status");
+    let r = mcp
+        .client
+        .call_tool(call("status", json!({})))
+        .await
+        .expect("status");
     let sc = r.structured_content.as_ref().expect("structuredContent");
     // No embeddings seeded, so every distinct content hash is pending.
     let needs = sc["needsEmbedding"].as_i64().unwrap();
@@ -856,7 +941,11 @@ async fn resource_includes_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn resource_url_encoded_with_spaces() {
     let mcp = connect().await;
-    let r = read(&mcp, "qmd://External%20Podcast%2F2023%20April%20-%20Interview.md").await;
+    let r = read(
+        &mcp,
+        "qmd://External%20Podcast%2F2023%20April%20-%20Interview.md",
+    )
+    .await;
     assert!(resource_text(&r).contains("Podcast Episode"));
     mcp.shutdown().await;
 }
@@ -869,7 +958,11 @@ async fn resource_url_encoded_with_spaces() {
 async fn spec_get_resource_uri_is_encoded() {
     let mcp = connect().await;
     // encodeQmdPath through MCP: slashes preserved, spaces → %20, '-'/'.' kept.
-    let r = get(&mcp, json!({ "file": "External Podcast/2023 April - Interview.md" })).await;
+    let r = get(
+        &mcp,
+        json!({ "file": "External Podcast/2023 April - Interview.md" }),
+    )
+    .await;
     assert_eq!(r.is_error, Some(false));
     assert_eq!(
         block(&r, 0)["resource"]["uri"],

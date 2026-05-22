@@ -46,9 +46,9 @@ use crate::llm::format;
 use crate::llm::gpu;
 use crate::llm::prompt;
 use crate::llm::pull;
-use crate::llm::traits::{Llm, LlamaToken};
+use crate::llm::traits::{LlamaToken, Llm};
 use crate::llm::types::{
-    EmbedOptions, EmbeddingResult, ExpandQueryOptions, GenerateResult, GenerateOptions, ModelInfo,
+    EmbedOptions, EmbeddingResult, ExpandQueryOptions, GenerateOptions, GenerateResult, ModelInfo,
     ModelResolutionConfig, PullOptions, QueryType, Queryable, RerankDocument, RerankDocumentResult,
     RerankOptions, RerankResult,
 };
@@ -438,16 +438,11 @@ impl Llm for LlamaCpp {
         // Single-text path uses round-robin so concurrent `embed()` calls
         // spread across workers instead of all serializing on workers[0].
         let mut raw = pool.submit_to_next(vec![formatted]).await?;
-        let model_name = opts
-            .model
-            .unwrap_or_else(|| self.embed_model_uri.clone());
-        Ok(raw
-            .pop()
-            .flatten()
-            .map(|embedding| EmbeddingResult {
-                embedding,
-                model: model_name,
-            }))
+        let model_name = opts.model.unwrap_or_else(|| self.embed_model_uri.clone());
+        Ok(raw.pop().flatten().map(|embedding| EmbeddingResult {
+            embedding,
+            model: model_name,
+        }))
     }
 
     async fn embed_batch(
@@ -475,10 +470,12 @@ impl Llm for LlamaCpp {
         let chunk_sizes: Vec<usize> = chunks.iter().map(Vec::len).collect();
         let raw_results = pool.scatter(chunks).await?;
 
-        let model_name = opts
-            .model
-            .unwrap_or_else(|| self.embed_model_uri.clone());
-        Ok(embed_results_to_output(raw_results, &chunk_sizes, &model_name))
+        let model_name = opts.model.unwrap_or_else(|| self.embed_model_uri.clone());
+        Ok(embed_results_to_output(
+            raw_results,
+            &chunk_sizes,
+            &model_name,
+        ))
     }
 
     async fn generate(
@@ -500,8 +497,10 @@ impl Llm for LlamaCpp {
 
         let text: String = tokio::task::spawn_blocking(move || -> Result<String> {
             let backend = backend::try_get()?;
-            let messages = vec![LlamaChatMessage::new("user".into(), prompt_owned)
-                .map_err(|e| Error::ChatTemplate(format!("user msg: {e}")))?];
+            let messages = vec![
+                LlamaChatMessage::new("user".into(), prompt_owned)
+                    .map_err(|e| Error::ChatTemplate(format!("user msg: {e}")))?,
+            ];
             let mut sampler = LlamaSampler::chain_simple([
                 LlamaSampler::top_k(20),
                 LlamaSampler::top_p(0.8, 1),
@@ -547,11 +546,7 @@ impl Llm for LlamaCpp {
     /// "ctx.decode" error from this method, raise
     /// `QMD_EXPAND_CONTEXT_SIZE` or override
     /// [`LlamaCppConfig::expand_context_size`].
-    async fn expand_query(
-        &self,
-        query: &str,
-        opts: ExpandQueryOptions,
-    ) -> Result<Vec<Queryable>> {
+    async fn expand_query(&self, query: &str, opts: ExpandQueryOptions) -> Result<Vec<Queryable>> {
         self.ensure_alive()?;
         self.ensure_not_ci()?;
         let _guard = self.in_flight.acquire();
@@ -569,11 +564,8 @@ impl Llm for LlamaCpp {
             let user_msg =
                 prompt::build_expand_query_user_message(&q_for_decode, intent.as_deref());
             let messages = vec![
-                LlamaChatMessage::new(
-                    "system".into(),
-                    prompt::EXPAND_QUERY_SYSTEM_PROMPT.into(),
-                )
-                .map_err(|e| Error::ChatTemplate(format!("system msg: {e}")))?,
+                LlamaChatMessage::new("system".into(), prompt::EXPAND_QUERY_SYSTEM_PROMPT.into())
+                    .map_err(|e| Error::ChatTemplate(format!("system msg: {e}")))?,
                 LlamaChatMessage::new("user".into(), user_msg)
                     .map_err(|e| Error::ChatTemplate(format!("user msg: {e}")))?,
             ];
@@ -614,9 +606,7 @@ impl Llm for LlamaCpp {
         let _guard = self.in_flight.acquire();
         self.ensure_alive()?;
 
-        let model_name = opts
-            .model
-            .unwrap_or_else(|| self.rerank_model_uri.clone());
+        let model_name = opts.model.unwrap_or_else(|| self.rerank_model_uri.clone());
 
         if docs.is_empty() {
             return Ok(RerankResult {
@@ -649,7 +639,11 @@ impl Llm for LlamaCpp {
                 })
             })
             .collect();
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(RerankResult {
             results,
@@ -732,12 +726,7 @@ impl Llm for LlamaCpp {
             match Arc::try_unwrap(pool_arc) {
                 Ok(pool) => {
                     for (i, worker) in pool.into_workers().into_iter().enumerate() {
-                        join_embed_worker_with_timeout(
-                            worker,
-                            i,
-                            Duration::from_secs(2),
-                        )
-                        .await;
+                        join_embed_worker_with_timeout(worker, i, Duration::from_secs(2)).await;
                     }
                 }
                 Err(_) => {
@@ -752,12 +741,7 @@ impl Llm for LlamaCpp {
             match Arc::try_unwrap(pool_arc) {
                 Ok(pool) => {
                     for (i, worker) in pool.into_workers().into_iter().enumerate() {
-                        join_rerank_worker_with_timeout(
-                            worker,
-                            i,
-                            Duration::from_secs(2),
-                        )
-                        .await;
+                        join_rerank_worker_with_timeout(worker, i, Duration::from_secs(2)).await;
                     }
                 }
                 Err(_) => {
@@ -785,11 +769,7 @@ impl Llm for LlamaCpp {
 const DEFAULT_EMBED_PARALLELISM: usize = 2;
 const DEFAULT_RERANK_PARALLELISM: usize = 2;
 
-fn resolve_pool_parallelism(
-    config_value: Option<usize>,
-    env_var: &str,
-    default: usize,
-) -> usize {
+fn resolve_pool_parallelism(config_value: Option<usize>, env_var: &str, default: usize) -> usize {
     if let Some(n) = config_value {
         return n.max(1);
     }
@@ -882,7 +862,12 @@ fn run_chat_decode(
             break;
         }
         let piece = model
-            .token_to_piece(token, &mut decoder, /* special */ false, /* lstrip */ None)
+            .token_to_piece(
+                token,
+                &mut decoder,
+                /* special */ false,
+                /* lstrip */ None,
+            )
             .unwrap_or_else(|_| String::from("\u{FFFD}"));
         output.push_str(&piece);
         batch.clear();
@@ -978,7 +963,11 @@ mod tests {
             Ok(vec![None, Some(vec![4.0])]),
         ];
         let out = embed_results_to_output(raw, &[2, 2], "test-model");
-        assert_eq!(out.len(), 4, "output slot count must match input slot count");
+        assert_eq!(
+            out.len(),
+            4,
+            "output slot count must match input slot count"
+        );
         assert_eq!(out[0].as_ref().unwrap().embedding, vec![1.0]);
         assert_eq!(out[1].as_ref().unwrap().embedding, vec![2.0]);
         assert!(out[2].is_none(), "None slot must survive at index 2");

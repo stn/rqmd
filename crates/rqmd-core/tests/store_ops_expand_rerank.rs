@@ -5,11 +5,11 @@ mod common;
 
 use std::sync::Arc;
 
-use rqmd_core::store::cache::{get_cache_key, get_cached_result};
-use rqmd_core::store::Store;
-use rqmd_core::store_ops::{expand_query, rerank, ExpandedQueryType, RerankCandidate};
 use rqmd_core::llm::traits::Llm;
 use rqmd_core::llm::types::{QueryType, Queryable};
+use rqmd_core::store::Store;
+use rqmd_core::store::cache::{get_cache_key, get_cached_result};
+use rqmd_core::store_ops::{ExpandedQueryType, RerankCandidate, expand_query, rerank};
 use tempfile::NamedTempFile;
 
 use common::mock_llm::MockLlm;
@@ -39,14 +39,18 @@ async fn expand_query_calls_llm_then_caches() {
     );
 
     let llm: Arc<dyn Llm> = mock.clone();
-    let r = expand_query(&store, llm.clone(), "q", "m", None).await.unwrap();
+    let r = expand_query(&store, llm.clone(), "q", "m", None)
+        .await
+        .unwrap();
     assert_eq!(r.len(), 2);
     assert_eq!(r[0].type_, ExpandedQueryType::Lex);
     assert_eq!(r[0].query, "literal q");
 
     // Second call should hit cache — no extra LLM call.
     let calls_before = mock.expand_calls.load(std::sync::atomic::Ordering::Relaxed);
-    let r2 = expand_query(&store, llm.clone(), "q", "m", None).await.unwrap();
+    let r2 = expand_query(&store, llm.clone(), "q", "m", None)
+        .await
+        .unwrap();
     assert_eq!(r2, r);
     let calls_after = mock.expand_calls.load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(calls_before, calls_after, "cache hit should not call LLM");
@@ -61,7 +65,9 @@ async fn expand_query_empty_intent_shares_cache_with_none() {
     let llm: Arc<dyn Llm> = mock.clone();
 
     // No intent populates the cache (synthetic [hyde, vec] is non-empty).
-    let _ = expand_query(&store, llm.clone(), "q", "m", None).await.unwrap();
+    let _ = expand_query(&store, llm.clone(), "q", "m", None)
+        .await
+        .unwrap();
     assert_eq!(mock.expand_calls.load(Relaxed), 1);
 
     // Empty intent normalizes to `None` → same cache key → cache hit, no new
@@ -119,7 +125,9 @@ async fn expand_query_does_not_cache_empty_result() {
     mock.set_expand("q", vec![]);
 
     let llm: Arc<dyn Llm> = mock.clone();
-    let r = expand_query(&store, llm.clone(), "q", "m", None).await.unwrap();
+    let r = expand_query(&store, llm.clone(), "q", "m", None)
+        .await
+        .unwrap();
     assert!(r.is_empty());
 
     // Second call: should call LLM again (no cache write happened).
@@ -204,9 +212,16 @@ async fn rerank_sorts_descending_and_uses_intent_in_cache_key() {
         "same intent should hit cache"
     );
 
-    let _ = rerank(&store, mock.clone() as Arc<dyn Llm>, "q", &docs, "model", None)
-        .await
-        .unwrap();
+    let _ = rerank(
+        &store,
+        mock.clone() as Arc<dyn Llm>,
+        "q",
+        &docs,
+        "model",
+        None,
+    )
+    .await
+    .unwrap();
     let calls_after_no_intent = mock.rerank_calls.load(std::sync::atomic::Ordering::Relaxed);
     assert!(
         calls_after_no_intent > calls_after_same_intent,
@@ -239,7 +254,10 @@ async fn rerank_caches_per_chunk_text_not_file() {
     assert!((r[1].score - 0.7).abs() < 1e-5);
 
     // The mock's rerank was called once on the dedup'd uncached set (1 entry).
-    assert_eq!(mock.rerank_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(
+        mock.rerank_calls.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
 
     // Verify the cache stores the score keyed on chunk text — second
     // invocation should be a pure cache hit.

@@ -7,9 +7,9 @@ mod common;
 
 use std::sync::Arc;
 
-use rqmd_core::store::embeddings::{ensure_vec_table, insert_embedding};
-use rqmd_core::store::Store;
 use rqmd_core::StoreOpsEmbedOptions;
+use rqmd_core::store::Store;
+use rqmd_core::store::embeddings::{ensure_vec_table, insert_embedding};
 use rqmd_core::store_ops::generate_embeddings;
 use rqmd_core::{LlamaCpp, LlamaCppConfig};
 use tempfile::NamedTempFile;
@@ -63,15 +63,14 @@ async fn force_with_no_docs_returns_zero_and_clears_vectors_table() {
     let r = generate_embeddings(&mut store, llm, opts).await.unwrap();
     assert_eq!(r.docs_processed, 0);
     // The global clear drops vectors_vec entirely.
-    let table_count: i64 = store
-        .with_connection(|c| {
-            c.query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='vectors_vec'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-        });
+    let table_count: i64 = store.with_connection(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='vectors_vec'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    });
     assert_eq!(table_count, 0, "vectors_vec should have been dropped");
 }
 

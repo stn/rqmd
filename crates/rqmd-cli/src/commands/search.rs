@@ -14,7 +14,7 @@ use crate::collection_filter::{
 };
 use crate::color::Palette;
 use crate::output::OutputFormat;
-use crate::search_view::{editor_uri_template, print_hits, search_result_to_hit, CliLinkCtx};
+use crate::search_view::{CliLinkCtx, editor_uri_template, print_hits, search_result_to_hit};
 use crate::state::IndexState;
 
 pub fn run(args: SearchArgs, state: &mut IndexState, p: &Palette) -> Result<()> {

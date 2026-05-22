@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
+use crate::store::Store;
 use crate::store::embeddings::search_vec_with_embedding;
 use crate::store::search::SearchResult;
-use crate::store::Store;
 
 use crate::llm::format::{format_doc_for_embedding, format_query_for_embedding};
 use crate::llm::traits::Llm;

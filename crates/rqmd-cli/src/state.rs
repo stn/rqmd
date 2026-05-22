@@ -6,9 +6,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use rqmd_core::collections::{find_local_config_path, local_db_path, sanitize_index_name, Config};
-use rqmd_core::llm::config::{resolve_models, ResolvedModels};
+use anyhow::{Context, Result, anyhow};
+use rqmd_core::collections::{Config, find_local_config_path, local_db_path, sanitize_index_name};
+use rqmd_core::llm::config::{ResolvedModels, resolve_models};
 use rqmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rqmd_core::llm::types::ModelResolutionConfig;
 use rqmd_core::paths::config_file_path;

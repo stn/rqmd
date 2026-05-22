@@ -597,9 +597,10 @@ mod cli_context_management {
             "Context for notes subdirectory",
         ]);
         out.assert_ok();
-        assert!(out
-            .stdout
-            .contains("✓ Added context for: qmd://fixtures/notes"));
+        assert!(
+            out.stdout
+                .contains("✓ Added context for: qmd://fixtures/notes")
+        );
     }
 
     #[test]
@@ -624,9 +625,10 @@ mod cli_context_management {
         .assert_ok();
         let out = e.run(&["context", "rm", "qmd://fixtures/notes"]);
         out.assert_ok();
-        assert!(out
-            .stdout
-            .contains("✓ Removed context for: qmd://fixtures/notes"));
+        assert!(
+            out.stdout
+                .contains("✓ Removed context for: qmd://fixtures/notes")
+        );
     }
 
     #[test]
@@ -794,9 +796,10 @@ mod cli_collection {
 
         let out = e.run(&["collection", "rename", "fixtures", "my-fixtures"]);
         out.assert_ok();
-        assert!(out
-            .stdout
-            .contains("✓ Renamed collection 'fixtures' to 'my-fixtures'"));
+        assert!(
+            out.stdout
+                .contains("✓ Renamed collection 'fixtures' to 'my-fixtures'")
+        );
         assert!(out.stdout.contains("qmd://fixtures/"));
         assert!(out.stdout.contains("qmd://my-fixtures/"));
 
@@ -1023,9 +1026,10 @@ mod search_output_formats {
         let e = seeded();
         let out = e.run(&["search", "--csv", "-n", "1", "test"]);
         out.assert_ok();
-        assert!(out
-            .stdout
-            .contains("docid,score,file,title,context,line,snippet"));
+        assert!(
+            out.stdout
+                .contains("docid,score,file,title,context,line,snippet")
+        );
         // Data row: #docid,score,qmd://collection/path,... (qmd parity).
         let row = out
             .stdout

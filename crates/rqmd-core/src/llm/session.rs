@@ -131,11 +131,7 @@ impl LlmSession {
 
     // ----- Delegated Llm methods --------------------------------------------
 
-    pub async fn embed(
-        &self,
-        text: &str,
-        opts: EmbedOptions,
-    ) -> Result<Option<EmbeddingResult>> {
+    pub async fn embed(&self, text: &str, opts: EmbedOptions) -> Result<Option<EmbeddingResult>> {
         self.check_valid()?;
         self.llm.embed(text, opts).await
     }
@@ -235,11 +231,7 @@ impl Llm for LlmSession {
         self.llm.model_exists(model).await
     }
 
-    async fn expand_query(
-        &self,
-        query: &str,
-        opts: ExpandQueryOptions,
-    ) -> Result<Vec<Queryable>> {
+    async fn expand_query(&self, query: &str, opts: ExpandQueryOptions) -> Result<Vec<Queryable>> {
         Self::expand_query(self, query, opts).await
     }
 

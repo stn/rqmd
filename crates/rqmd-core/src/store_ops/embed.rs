@@ -11,12 +11,12 @@ use std::time::{Duration, Instant};
 use crate::store::chunking::ChunkStrategy;
 use crate::store::documents::extract_title;
 use crate::store::embeddings::{
-    clear_all_embeddings, get_embedding_docs_for_batch, get_pending_embedding_docs,
-    insert_embedding, remove_incomplete_embeddings, PendingEmbeddingDoc,
+    PendingEmbeddingDoc, clear_all_embeddings, get_embedding_docs_for_batch,
+    get_pending_embedding_docs, insert_embedding, remove_incomplete_embeddings,
 };
 use crate::store::path::now_rfc3339;
 use crate::store::{
-    Store, CHUNK_SIZE_TOKENS, DEFAULT_EMBED_MAX_BATCH_BYTES, DEFAULT_EMBED_MAX_DOCS_PER_BATCH,
+    CHUNK_SIZE_TOKENS, DEFAULT_EMBED_MAX_BATCH_BYTES, DEFAULT_EMBED_MAX_DOCS_PER_BATCH, Store,
 };
 
 use crate::llm::config::resolve_embed_model;
@@ -424,8 +424,8 @@ async fn run_inner(
             batch_start = batch_end;
         }
 
-        let removed =
-            store.with_connection_mut(|c| remove_incomplete_embeddings(c, &expected_chunks, model))?;
+        let removed = store
+            .with_connection_mut(|c| remove_incomplete_embeddings(c, &expected_chunks, model))?;
         if removed > 0 {
             counters.chunks_embedded = counters.chunks_embedded.saturating_sub(removed as usize);
         }

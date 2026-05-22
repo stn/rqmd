@@ -117,7 +117,8 @@ fn extract_snippet_inner(
         }
     }
 
-    if !is_retry && best_score <= 0.0
+    if !is_retry
+        && best_score <= 0.0
         && let Some(pos) = chunk_pos
     {
         if pos == 0 {
@@ -253,7 +254,9 @@ mod tests {
 
     #[test]
     fn snippet_uses_chunk_pos_hint() {
-        let body = "First section...\n".repeat(50) + "Target keyword here\n" + &"More content...".repeat(50);
+        let body = "First section...\n".repeat(50)
+            + "Target keyword here\n"
+            + &"More content...".repeat(50);
         let chunk_pos = body.find("Target keyword").unwrap();
         let r = extract_snippet(&body, "Target", Some(200), Some(chunk_pos), None, None);
         assert!(r.snippet.contains("Target keyword"));
@@ -343,7 +346,14 @@ mod tests {
         let padding = pad_line.repeat(100);
         let body = format!("{padding}chunk content here\nmore chunk content\n{padding}");
         let chunk_pos = padding.len();
-        let r = extract_snippet(&body, "\"unrelated quoted phrase\"", Some(200), Some(chunk_pos), None, None);
+        let r = extract_snippet(
+            &body,
+            "\"unrelated quoted phrase\"",
+            Some(200),
+            Some(chunk_pos),
+            None,
+            None,
+        );
         assert!(r.line > 50);
         assert!(r.line < 110);
     }

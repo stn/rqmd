@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub use rusqlite::{self, params, Connection, Row, Statement, Transaction};
+pub use rusqlite::{self, Connection, Row, Statement, Transaction, params};
 
 // ============================================================================
 // Errors

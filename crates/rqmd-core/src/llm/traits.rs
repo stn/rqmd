@@ -54,11 +54,8 @@ pub trait Llm: Send + Sync {
 
     /// Free-form text generation. `opts.max_tokens` / `temperature` map
     /// to the sampler chain.
-    async fn generate(
-        &self,
-        prompt: &str,
-        opts: GenerateOptions,
-    ) -> Result<Option<GenerateResult>>;
+    async fn generate(&self, prompt: &str, opts: GenerateOptions)
+    -> Result<Option<GenerateResult>>;
 
     /// Existence check for a model URI. HF URIs are assumed to exist
     /// without a network round-trip (matches TS); local paths are
@@ -68,11 +65,7 @@ pub trait Llm: Send + Sync {
     /// Expand a search query into `lex` / `vec` / `hyde` variations.
     /// Returns the fallback set (`[hyde, lex?, vec]`) when the model
     /// produces nothing usable.
-    async fn expand_query(
-        &self,
-        query: &str,
-        opts: ExpandQueryOptions,
-    ) -> Result<Vec<Queryable>>;
+    async fn expand_query(&self, query: &str, opts: ExpandQueryOptions) -> Result<Vec<Queryable>>;
 
     /// Score `docs` against `query` using the reranker model under
     /// pooling=Rank. Results come back sorted by descending score.

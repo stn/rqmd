@@ -1,9 +1,9 @@
 //! Integration tests for `rqmd_core::llm::prompt`.
 
 use rqmd_core::llm::prompt::{
-    build_expand_query_user_message, build_qwen3_rerank_prompt, fallback_queryables,
-    filter_with_query_terms, parse_expand_query_output, EXPAND_QUERY_SYSTEM_PROMPT,
-    QWEN3_RERANKER_INSTRUCT,
+    EXPAND_QUERY_SYSTEM_PROMPT, QWEN3_RERANKER_INSTRUCT, build_expand_query_user_message,
+    build_qwen3_rerank_prompt, fallback_queryables, filter_with_query_terms,
+    parse_expand_query_output,
 };
 use rqmd_core::llm::types::{QueryType, Queryable};
 

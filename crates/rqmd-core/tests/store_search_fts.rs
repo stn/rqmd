@@ -1,9 +1,9 @@
 //! End-to-end test for `search_fts` against a real in-memory store.
 
+use rqmd_core::Store;
 use rqmd_core::store::documents::{hash_content, insert_content, insert_document};
 use rqmd_core::store::path::now_rfc3339;
-use rqmd_core::store::search::{search_fts, SearchSource};
-use rqmd_core::Store;
+use rqmd_core::store::search::{SearchSource, search_fts};
 use tempfile::NamedTempFile;
 
 fn insert(store: &Store, collection: &str, path: &str, title: &str, body: &str) {

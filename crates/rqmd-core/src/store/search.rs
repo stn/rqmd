@@ -7,7 +7,7 @@
 //! The vector-search half (`searchVec`, `getEmbedding`) is LLM-using and
 //! deliberately out of scope this pass.
 
-use rusqlite::{types::Value, Connection};
+use rusqlite::{Connection, types::Value};
 
 use super::context::get_context_for_file;
 use super::docid::get_docid;

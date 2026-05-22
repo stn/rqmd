@@ -45,8 +45,7 @@ pub fn build_qwen3_rerank_prompt(query: &str, document: &str) -> String {
 /// three lines of the form `lex: ...` / `vec: ...` / `hyde: ...`, with
 /// no commentary. Spike #4 confirmed this prompt + a chat-tuned model
 /// reliably produces parseable output without GBNF enforcement.
-pub const EXPAND_QUERY_SYSTEM_PROMPT: &str =
-    "You expand search queries. Output ONLY 3 lines, each starting with one of \
+pub const EXPAND_QUERY_SYSTEM_PROMPT: &str = "You expand search queries. Output ONLY 3 lines, each starting with one of \
      `lex: `, `vec: `, or `hyde: ` followed by a query variation. \
      No commentary, no other text.";
 
@@ -131,7 +130,10 @@ pub fn filter_with_query_terms(
 
 /// Build the fallback `Queryable` list when expansion produces nothing
 /// usable. Mirrors TS lines 1362–1373.
-pub fn fallback_queryables(query: &str, include_lexical: bool) -> Vec<crate::llm::types::Queryable> {
+pub fn fallback_queryables(
+    query: &str,
+    include_lexical: bool,
+) -> Vec<crate::llm::types::Queryable> {
     let mut out = vec![
         crate::llm::types::Queryable {
             type_: crate::llm::types::QueryType::Hyde,

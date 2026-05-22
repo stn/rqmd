@@ -317,9 +317,7 @@ pub fn format_rfc3339_utc(epoch_secs: u64, millis: u32) -> String {
 
     let (year, month, day) = civil_from_days(days);
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 fn civil_from_days(z: i64) -> (i32, u32, u32) {
@@ -368,10 +366,7 @@ pub fn parse_rfc3339_to_epoch_days(s: &str) -> Option<i64> {
 /// Days between `now` and `then_rfc3339`. Negative if `then` is in the future.
 pub fn days_since_rfc3339(then_rfc3339: &str) -> Option<i64> {
     let then_days = parse_rfc3339_to_epoch_days(then_rfc3339)?;
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs() as i64;
+    let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
     let now_days = now_secs.div_euclid(86_400);
     Some(now_days - then_days)
 }
@@ -387,7 +382,13 @@ mod tests {
 
     /// Env vars that the path helpers consult. Saved/restored wholesale by
     /// [`EnvGuard`] so env-mutating tests (all `#[serial]`) cannot leak state.
-    const ENV_KEYS: &[&str] = &["PWD", "WSL_DISTRO_NAME", "WSL_INTEROP", "HOME", "RQMD_INDEX_PATH"];
+    const ENV_KEYS: &[&str] = &[
+        "PWD",
+        "WSL_DISTRO_NAME",
+        "WSL_INTEROP",
+        "HOME",
+        "RQMD_INDEX_PATH",
+    ];
 
     /// RAII guard that snapshots `ENV_KEYS` on construction and restores them
     /// on drop — even if the test panics. `set`/`unset` mutate the process
@@ -400,7 +401,12 @@ mod tests {
 
     impl EnvGuard {
         fn new() -> Self {
-            EnvGuard(ENV_KEYS.iter().map(|k| (*k, std::env::var(k).ok())).collect())
+            EnvGuard(
+                ENV_KEYS
+                    .iter()
+                    .map(|k| (*k, std::env::var(k).ok()))
+                    .collect(),
+            )
         }
         fn set(&self, k: &str, v: &str) {
             unsafe { std::env::set_var(k, v) };
@@ -503,7 +509,10 @@ mod tests {
 
     #[test]
     fn parse_rfc3339_to_epoch_days_handles_prefix() {
-        assert_eq!(parse_rfc3339_to_epoch_days("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(
+            parse_rfc3339_to_epoch_days("1970-01-01T00:00:00.000Z"),
+            Some(0)
+        );
         assert_eq!(
             parse_rfc3339_to_epoch_days("2024-01-01T12:34:56.789Z"),
             Some(19_723)
@@ -608,7 +617,10 @@ mod tests {
             normalize_path_separators("D:\\Projects\\qmd\\src"),
             "D:/Projects/qmd/src"
         );
-        assert_eq!(normalize_path_separators("\\path\\to\\file"), "/path/to/file");
+        assert_eq!(
+            normalize_path_separators("\\path\\to\\file"),
+            "/path/to/file"
+        );
     }
 
     #[test]
@@ -626,14 +638,23 @@ mod tests {
     #[test]
     fn normalize_path_separators_unix_unchanged() {
         assert_eq!(normalize_path_separators("/path/to/file"), "/path/to/file");
-        assert_eq!(normalize_path_separators("/usr/local/bin"), "/usr/local/bin");
+        assert_eq!(
+            normalize_path_separators("/usr/local/bin"),
+            "/usr/local/bin"
+        );
         assert_eq!(normalize_path_separators("relative/path"), "relative/path");
     }
 
     #[test]
     fn normalize_path_separators_consecutive() {
-        assert_eq!(normalize_path_separators("path\\\\to\\\\file"), "path//to//file");
-        assert_eq!(normalize_path_separators("C:\\\\Users\\\\name"), "C://Users//name");
+        assert_eq!(
+            normalize_path_separators("path\\\\to\\\\file"),
+            "path//to//file"
+        );
+        assert_eq!(
+            normalize_path_separators("C:\\\\Users\\\\name"),
+            "C://Users//name"
+        );
     }
 
     #[test]
@@ -648,9 +669,18 @@ mod tests {
 
     #[test]
     fn get_relative_path_from_prefix_exact_match() {
-        assert_eq!(get_relative_path_from_prefix("/home/user", "/home/user"), Some(String::new()));
-        assert_eq!(get_relative_path_from_prefix("C:/Users/name", "C:/Users/name"), Some(String::new()));
-        assert_eq!(get_relative_path_from_prefix("/path", "/path"), Some(String::new()));
+        assert_eq!(
+            get_relative_path_from_prefix("/home/user", "/home/user"),
+            Some(String::new())
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("C:/Users/name", "C:/Users/name"),
+            Some(String::new())
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("/path", "/path"),
+            Some(String::new())
+        );
     }
 
     #[test]
@@ -671,9 +701,18 @@ mod tests {
 
     #[test]
     fn get_relative_path_from_prefix_not_under() {
-        assert_eq!(get_relative_path_from_prefix("/home/other", "/home/user"), None);
-        assert_eq!(get_relative_path_from_prefix("/usr/local", "/home/user"), None);
-        assert_eq!(get_relative_path_from_prefix("C:/Users/other", "D:/Users"), None);
+        assert_eq!(
+            get_relative_path_from_prefix("/home/other", "/home/user"),
+            None
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("/usr/local", "/home/user"),
+            None
+        );
+        assert_eq!(
+            get_relative_path_from_prefix("C:/Users/other", "D:/Users"),
+            None
+        );
     }
 
     #[test]
@@ -717,9 +756,15 @@ mod tests {
         // Empty prefix.
         assert_eq!(get_relative_path_from_prefix("/path/to/file", ""), None);
         // Substring but not in hierarchy.
-        assert_eq!(get_relative_path_from_prefix("/home/username", "/home/user"), None);
+        assert_eq!(
+            get_relative_path_from_prefix("/home/username", "/home/user"),
+            None
+        );
         // Root prefix.
-        assert_eq!(get_relative_path_from_prefix("/home/user", "/"), Some("home/user".into()));
+        assert_eq!(
+            get_relative_path_from_prefix("/home/user", "/"),
+            Some("home/user".into())
+        );
     }
 
     // ---- resolve: Unix ----
@@ -730,7 +775,10 @@ mod tests {
         let _g = EnvGuard::with_pwd_no_wsl("/home/user");
         assert_eq!(resolve(&["/base", "relative"]), "/base/relative");
         assert_eq!(resolve(&["/base", "a/b/c"]), "/base/a/b/c");
-        assert_eq!(resolve(&["/home", "user/documents"]), "/home/user/documents");
+        assert_eq!(
+            resolve(&["/home", "user/documents"]),
+            "/home/user/documents"
+        );
     }
 
     #[test]
@@ -794,7 +842,10 @@ mod tests {
     fn resolve_windows_absolute_paths() {
         let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
         assert_eq!(resolve(&["C:/base", "D:/other"]), "D:/other");
-        assert_eq!(resolve(&["C:/Users", "C:/Program Files"]), "C:/Program Files");
+        assert_eq!(
+            resolve(&["C:/Users", "C:/Program Files"]),
+            "C:/Program Files"
+        );
         assert_eq!(resolve(&["D:/any", "E:/other"]), "E:/other");
     }
 
@@ -803,7 +854,10 @@ mod tests {
     fn resolve_windows_backslashes() {
         let _g = EnvGuard::with_pwd_no_wsl("C:/Users/name");
         assert_eq!(resolve(&["C:\\base", "relative"]), "C:/base/relative");
-        assert_eq!(resolve(&["C:\\Users\\name", "Documents"]), "C:/Users/name/Documents");
+        assert_eq!(
+            resolve(&["C:\\Users\\name", "Documents"]),
+            "C:/Users/name/Documents"
+        );
         assert_eq!(resolve(&["C:\\base", "a\\b\\c"]), "C:/base/a/b/c");
     }
 
@@ -989,7 +1043,10 @@ mod tests {
         let g = EnvGuard::new();
         g.set("RQMD_INDEX_PATH", "/tmp/test-index.sqlite");
         // RQMD_INDEX_PATH takes precedence regardless of index name / mode.
-        assert_eq!(default_db_path(None).unwrap(), PathBuf::from("/tmp/test-index.sqlite"));
+        assert_eq!(
+            default_db_path(None).unwrap(),
+            PathBuf::from("/tmp/test-index.sqlite")
+        );
         assert_eq!(
             default_db_path(Some("custom")).unwrap(),
             PathBuf::from("/tmp/test-index.sqlite")

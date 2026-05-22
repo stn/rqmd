@@ -35,7 +35,13 @@ async fn nonexistent_local_path_reports_exists_false() {
         .model_exists(path)
         .await
         .expect("model_exists must not error for local paths");
-    assert!(!info.exists, "a missing local path must report exists=false");
+    assert!(
+        !info.exists,
+        "a missing local path must report exists=false"
+    );
     assert_eq!(info.name, path);
-    assert!(info.path.is_none(), "no path is returned when the file is absent");
+    assert!(
+        info.path.is_none(),
+        "no path is returned when the file is absent"
+    );
 }

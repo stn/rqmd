@@ -6,7 +6,7 @@
 //! `store_collections` and `store_config` tables.
 
 use indexmap::IndexMap;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::collections::{Collection, Config, ContextMap};
 

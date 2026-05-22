@@ -6,10 +6,8 @@
 
 use std::sync::Arc;
 
-use crate::store::chunking::{chunk_document, ChunkStrategy};
-use crate::store::{
-    CHUNK_OVERLAP_TOKENS, CHUNK_SIZE_TOKENS, CHUNK_WINDOW_TOKENS,
-};
+use crate::store::chunking::{ChunkStrategy, chunk_document};
+use crate::store::{CHUNK_OVERLAP_TOKENS, CHUNK_SIZE_TOKENS, CHUNK_WINDOW_TOKENS};
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::traits::Llm;
@@ -67,11 +65,8 @@ pub async fn chunk_document_by_tokens(
         Some(window_chars),
     );
     let mut results: Vec<TokenChunk> = Vec::with_capacity(initial.len());
-    let mut stack: Vec<(String, usize)> = initial
-        .into_iter()
-        .rev()
-        .map(|c| (c.text, c.pos))
-        .collect();
+    let mut stack: Vec<(String, usize)> =
+        initial.into_iter().rev().map(|c| (c.text, c.pos)).collect();
 
     while let Some((text, pos)) = stack.pop() {
         if cancel.is_some_and(|c| c.is_cancelled()) {

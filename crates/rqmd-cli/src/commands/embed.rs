@@ -4,12 +4,12 @@
 //! and `generateEmbeddings` orchestration in `src/store.ts` (lines 1511–1700).
 
 use std::io::IsTerminal;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
-use rqmd_core::store_ops::{generate_embeddings, EmbedOptions, EmbedProgress};
+use anyhow::{Context, Result, bail};
+use rqmd_core::store_ops::{EmbedOptions, EmbedProgress, generate_embeddings};
 
 use crate::cli::EmbedArgs;
 use crate::color::Palette;

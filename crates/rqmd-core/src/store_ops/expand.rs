@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::store::cache::{get_cached_result, set_cached_result};
 use crate::store::Store;
+use crate::store::cache::{get_cached_result, set_cached_result};
 use serde::{Deserialize, Serialize};
 
 use crate::llm::traits::Llm;

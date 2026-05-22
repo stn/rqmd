@@ -2,13 +2,13 @@
 //! migration, ported from store.test.ts `describe("Content-Addressable
 //! Storage")`.
 
+use rqmd_core::Store;
 use rqmd_core::db::rusqlite::params;
 use rqmd_core::store::documents::{
     deactivate_document, find_active_document, find_or_migrate_legacy_document, hash_content,
     insert_content, insert_document,
 };
 use rqmd_core::store::path::now_rfc3339;
-use rqmd_core::Store;
 use tempfile::NamedTempFile;
 
 fn open() -> (NamedTempFile, Store) {
@@ -170,10 +170,12 @@ fn reindexing_deactivated_path_reactivates_without_unique_violation() {
     store
         .with_connection(|c| deactivate_document(c, "docs", "docs/foo.md"))
         .unwrap();
-    assert!(store
-        .with_connection(|c| find_active_document(c, "docs", "docs/foo.md"))
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .with_connection(|c| find_active_document(c, "docs", "docs/foo.md"))
+            .unwrap()
+            .is_none()
+    );
 
     // File comes back: re-insert must reactivate, not violate UNIQUE(collection,path).
     let new = "# Second Version";
@@ -226,10 +228,12 @@ fn migrate_renames_lowercase_path_to_case_preserved() {
     assert_eq!(migrated.hash, hash);
 
     // Old lowercase path no longer active; new case-preserved path is.
-    assert!(store
-        .with_connection(|c| find_active_document(c, "docs", "skills/skill.md"))
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .with_connection(|c| find_active_document(c, "docs", "skills/skill.md"))
+            .unwrap()
+            .is_none()
+    );
     let now_active = store
         .with_connection(|c| find_active_document(c, "docs", "skills/SKILL.md"))
         .unwrap()
@@ -282,12 +286,16 @@ fn migrate_returns_existing_doc_when_canonical_present() {
         .expect("canonical doc should be found");
     assert_eq!(r.hash, hash);
 
-    assert!(store
-        .with_connection(|c| find_active_document(c, "docs", "readme.md"))
-        .unwrap()
-        .is_some());
-    assert!(store
-        .with_connection(|c| find_active_document(c, "docs", "README.md"))
-        .unwrap()
-        .is_some());
+    assert!(
+        store
+            .with_connection(|c| find_active_document(c, "docs", "readme.md"))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .with_connection(|c| find_active_document(c, "docs", "README.md"))
+            .unwrap()
+            .is_some()
+    );
 }
