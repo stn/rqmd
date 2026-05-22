@@ -1473,3 +1473,101 @@ mod hide_filesystem_paths {
         assert!(!out.stdout.contains("Path:"), "stdout: {}", out.stdout);
     }
 }
+
+// ===========================================================================
+// MCP foreground HTTP server (`rqmd mcp --http`)
+// ===========================================================================
+//
+// Port of qmd's "foreground HTTP server" cases (cli.test.ts:1652-1732). These
+// spawn the real `rqmd mcp --http` binary, poll `/health`, and POST `/query`.
+// The MCP *daemon* lifecycle (`--daemon`/`stop`/PID) is covered separately.
+mod cli_mcp_http {
+    use crate::common::*;
+    use std::time::Duration;
+
+    #[test]
+    fn foreground_http_server_responds_to_health_check() {
+        let e = env();
+        let cache = tempfile::tempdir().expect("mkdtemp cache");
+        let idx = "mcp-health";
+        // Seed an index so the server opens a real store.
+        spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &[
+                "--index",
+                idx,
+                "collection",
+                "add",
+                ".",
+                "--name",
+                "fixtures",
+            ],
+        )
+        .assert_ok();
+
+        let port = free_port();
+        let port_s = port.to_string();
+        let _server = ServerChild {
+            child: spawn_cache_child(
+                &e.fixtures,
+                cache.path(),
+                &e.config_dir,
+                &["--index", idx, "mcp", "--http", "--port", &port_s],
+            ),
+            port,
+        };
+
+        let body = wait_for_health(port, Duration::from_secs(15)).expect("server health");
+        assert_eq!(body["status"], "ok", "health body: {body}");
+        // `_server` dropped here → child killed + reaped.
+    }
+
+    #[test]
+    fn foreground_http_server_honors_index_and_serves_query() {
+        let e = env();
+        let cache = tempfile::tempdir().expect("mkdtemp cache");
+        let idx = "mcp-alt";
+        let coll = "mcp-fixtures";
+        spawn_cache(
+            &e.fixtures,
+            cache.path(),
+            &e.config_dir,
+            &["--index", idx, "collection", "add", ".", "--name", coll],
+        )
+        .assert_ok();
+
+        let port = free_port();
+        let port_s = port.to_string();
+        let _server = ServerChild {
+            child: spawn_cache_child(
+                &e.fixtures,
+                cache.path(),
+                &e.config_dir,
+                &["--index", idx, "mcp", "--http", "--port", &port_s],
+            ),
+            port,
+        };
+        wait_for_health(port, Duration::from_secs(15)).expect("server health");
+
+        // "authentication" matches notes/meeting.md ("Bob to fix authentication
+        // bug"). A `lex` sub-query with rerank:false keeps this LLM-free.
+        let resp = post_query(
+            port,
+            serde_json::json!({
+                "searches": [{ "type": "lex", "query": "authentication" }],
+                "limit": 5,
+                "rerank": false
+            }),
+        );
+        let results = resp["results"].as_array().expect("results array");
+        let files: Vec<&str> = results.iter().filter_map(|r| r["file"].as_str()).collect();
+        assert!(
+            files
+                .iter()
+                .any(|f| f.contains(&format!("{coll}/notes/meeting.md"))),
+            "expected a {coll}/notes/meeting.md hit, got: {files:?}"
+        );
+    }
+}

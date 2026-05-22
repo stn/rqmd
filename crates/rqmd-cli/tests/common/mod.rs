@@ -19,8 +19,10 @@
 
 #![allow(dead_code)]
 
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::CommandCargoExt;
 
@@ -286,4 +288,92 @@ pub fn is_hex6(s: &str) -> bool {
 /// First non-empty line of `s` (the first data row for csv/files output).
 pub fn first_line(s: &str) -> &str {
     s.lines().find(|l| !l.trim().is_empty()).unwrap_or("")
+}
+
+// ---------------------------------------------------------------------------
+// MCP HTTP server harness (`mcp --http` / `--daemon`)
+// ---------------------------------------------------------------------------
+//
+// These helpers spawn the `rqmd` binary as a *long-running* child (the existing
+// `spawn`/`spawn_cache` use `.output()`, which blocks until exit and is useless
+// for a server). They use the `spawn_cache` env contract — `RQMD_CACHE_DIR` set,
+// `RQMD_INDEX_PATH` + `XDG_CACHE_HOME` removed — because `default_db_path`
+// short-circuits on `RQMD_INDEX_PATH` *before* the `--index <name>` path is
+// computed, so a pinned index path would make `--index` a no-op. The same
+// `cache` dir must back the seeding (`collection add`) and the server so they
+// open the same `<cache>/<name>.sqlite`.
+
+/// A spawned long-running `rqmd` server child plus the port it was told to bind.
+/// Killed (and reaped) on drop so a failing test never leaks the process.
+pub struct ServerChild {
+    pub child: Child,
+    pub port: u16,
+}
+
+impl Drop for ServerChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Pick an ephemeral free TCP port by binding `:0` and immediately releasing it.
+/// (Small TOCTOU window before the server rebinds, acceptable for tests; mirrors
+/// qmd's random-port approach.)
+pub fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("bind ephemeral port")
+        .local_addr()
+        .expect("local_addr")
+        .port()
+}
+
+/// Spawn `rqmd <args>` as a detached long-running child under the `spawn_cache`
+/// env (see module note). stdio is nulled. The caller polls for readiness.
+pub fn spawn_cache_child(cwd: &Path, cache: &Path, cfg: &Path, args: &[&str]) -> Child {
+    let mut cmd = Command::cargo_bin("rqmd").expect("rqmd binary is built by cargo test");
+    cmd.current_dir(cwd)
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("RQMD_INDEX_PATH")
+        .env("NO_COLOR", "1")
+        .env("CI", "1")
+        .env("PWD", cwd)
+        .env("RQMD_CACHE_DIR", cache)
+        .env("RQMD_CONFIG_DIR", cfg)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .args(args);
+    cmd.spawn().expect("spawn rqmd server")
+}
+
+/// Poll `http://127.0.0.1:<port>/health` until it returns 200 (parsed JSON
+/// body) or the deadline elapses. `None` on timeout.
+pub fn wait_for_health(port: u16, timeout: Duration) -> Option<serde_json::Value> {
+    let url = format!("http://127.0.0.1:{port}/health");
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match ureq::get(&url).call() {
+            Ok(resp) if resp.status() == 200 => {
+                if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                    return Some(v);
+                }
+            }
+            _ => {}
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    None
+}
+
+/// POST a JSON body to `http://127.0.0.1:<port>/query` and return the parsed
+/// response. Panics on transport error so tests fail loudly.
+pub fn post_query(port: u16, body: serde_json::Value) -> serde_json::Value {
+    let url = format!("http://127.0.0.1:{port}/query");
+    ureq::post(&url)
+        .send_json(body)
+        .expect("POST /query")
+        .into_json::<serde_json::Value>()
+        .expect("query response json")
 }

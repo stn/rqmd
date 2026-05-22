@@ -43,6 +43,10 @@ assert_cmd = "2"
 # `#[tokio::test]` itself relies on the `rt-multi-thread` + `macros` already
 # enabled on the normal `tokio` dependency above, so no dev `tokio` entry needed.
 rmcp       = { version = "1.7", default-features = false, features = ["client", "transport-child-process"] }
+# Blocking HTTP client for the `mcp --http` / daemon e2e tests (`tests/cli.rs`):
+# they spawn the server binary, poll `/health`, and POST `/query`. Localhost is
+# plain HTTP, so the TLS default feature is disabled; only `json` is needed.
+ureq       = { version = "2", default-features = false, features = ["json"] }
 
 [features]
 # GPU backends re-exported from rqmd-core so users can invoke `cargo build -p
