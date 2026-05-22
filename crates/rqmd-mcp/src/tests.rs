@@ -16,11 +16,18 @@
 
 use std::path::Path;
 
+use rmcp::model::{CallToolResult, ReadResourceResult};
 use serde_json::{Value, json};
 
+use rqmd_core::store::documents::{insert_content, insert_document};
+use rqmd_core::store::path::now_rfc3339;
 use rqmd_core::{AddCollectionOptions, RqmdStore, RqmdStoreOptions, UpdateOptions};
 
 use crate::server::QmdMcpServer;
+
+/// Documents seeded by [`seed_store`]: the 6 on-disk fixtures plus the
+/// raw-inserted spaces-path doc. Pinned so `status` tests assert an exact count.
+const SEEDED_DOCS: i64 = 7;
 
 /// Seed a temp index mirroring qmd's `seedTestData` plus the absolute-line
 /// fixture. Collection `docs` → display paths like `docs/readme.md`.
@@ -74,11 +81,156 @@ async fn seed_store(dir: &Path) -> RqmdStore {
         )
         .unwrap();
     store.update(UpdateOptions::default()).await.unwrap();
+
+    // Per-path context (qmd config: collection "docs", context "/meetings").
+    assert!(
+        store
+            .add_context("docs", "/meetings", "Meeting notes and transcripts")
+            .unwrap(),
+        "add_context should find the docs collection"
+    );
+
+    // Spaces-in-path doc, inserted raw to bypass `handelize` (which slugifies
+    // " " → "-"). Mirrors qmd's direct DB insert at mcp.test.ts:736-745 — a
+    // spaces path can't survive real indexing in either project.
+    let now = now_rfc3339();
+    let s = store.internal();
+    s.with_connection(|c| {
+        insert_content(
+            c,
+            "hash_spaces",
+            "# Podcast Episode\n\nInterview content here.",
+            &now,
+        )
+    })
+    .unwrap();
+    s.with_connection(|c| {
+        insert_document(
+            c,
+            "docs",
+            "External Podcast/2023 April - Interview.md",
+            "Podcast Episode",
+            "hash_spaces",
+            &now,
+            &now,
+        )
+    })
+    .unwrap();
+
     store
 }
 
 fn call(name: &str, args: Value) -> rmcp::model::CallToolRequestParams {
     serde_json::from_value(json!({ "name": name, "arguments": args })).unwrap()
+}
+
+// ============================================================================
+// In-process client harness for the granular per-tool tests
+// ============================================================================
+//
+// These mirror qmd's `mcp.test.ts` "MCP Server" describe block 1:1 but drive
+// everything through the real `rmcp` client (the existing roundtrips above only
+// smoke-test a subset). The function-level equivalents live in rqmd-core
+// (`store_search_fts.rs`, `store_lookup.rs`, `status.rs`, …); having both lets a
+// regression be pinned to the core function vs the MCP plumbing.
+//
+// LLM-free: every `query` here uses `lex` + `rerank:false`, and
+// `get`/`multi_get`/`status`/resource reads are pure SQL — no model is loaded.
+// The vec/hyde/rerank scenarios live in `tests/mcp_llm.rs`.
+
+type Client = rmcp::service::RunningService<rmcp::service::RoleClient, ()>;
+type Server = rmcp::service::RunningService<rmcp::service::RoleServer, QmdMcpServer>;
+
+/// An in-process client+server pair over a duplex pipe, seeded by `seed_store`.
+/// Holds the tempdir and both `RunningService` ends alive for the test.
+struct Mcp {
+    tmp: tempfile::TempDir,
+    client: Client,
+    _server: Server,
+}
+
+impl Mcp {
+    /// Deterministic teardown (the worker thread is also reclaimed on drop, so
+    /// this isn't strictly required — it just avoids the cancel-on-drop debug log).
+    async fn shutdown(self) {
+        self.client.cancel().await.ok();
+    }
+}
+
+/// Seed a fresh store and wire an in-process rmcp client to its MCP server.
+async fn connect() -> Mcp {
+    use rmcp::{serve_client, serve_server};
+    let tmp = tempfile::tempdir().unwrap();
+    let server = QmdMcpServer::new(seed_store(tmp.path()).await);
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    let (srv, cli) = tokio::join!(serve_server(server, server_io), serve_client((), client_io));
+    Mcp {
+        tmp,
+        _server: srv.expect("server initialized"),
+        client: cli.expect("client initialized"),
+    }
+}
+
+/// Run a `lex` query with reranking off (LLM-free).
+async fn query_lex(mcp: &Mcp, q: &str) -> CallToolResult {
+    mcp.client
+        .call_tool(call(
+            "query",
+            json!({ "searches": [{ "type": "lex", "query": q }], "rerank": false }),
+        ))
+        .await
+        .expect("query")
+}
+
+/// Read a `qmd://` resource by URI.
+async fn read(mcp: &Mcp, uri: &str) -> ReadResourceResult {
+    let params: rmcp::model::ReadResourceRequestParams =
+        serde_json::from_value(json!({ "uri": uri })).unwrap();
+    mcp.client.read_resource(params).await.expect("read resource")
+}
+
+/// `structuredContent.results` as a JSON array.
+fn structured_results(r: &CallToolResult) -> Vec<Value> {
+    r.structured_content.as_ref().expect("structuredContent")["results"]
+        .as_array()
+        .expect("results array")
+        .clone()
+}
+
+/// `content[i]` serialized to JSON.
+fn block(r: &CallToolResult, i: usize) -> Value {
+    serde_json::to_value(&r.content[i]).unwrap()
+}
+
+/// Concatenated text of every `type:"text"` content block.
+fn text_blocks(r: &CallToolResult) -> String {
+    r.content
+        .iter()
+        .filter_map(|c| {
+            let v = serde_json::to_value(c).ok()?;
+            (v["type"] == "text").then(|| v["text"].as_str().unwrap_or_default().to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// All `type:"resource"` content blocks, serialized to JSON.
+fn resource_blocks(r: &CallToolResult) -> Vec<Value> {
+    r.content
+        .iter()
+        .filter_map(|c| {
+            let v = serde_json::to_value(c).ok()?;
+            (v["type"] == "resource").then_some(v)
+        })
+        .collect()
+}
+
+/// Text of the first resource-read content block.
+fn resource_text(r: &ReadResourceResult) -> String {
+    serde_json::to_value(&r.contents[0]).unwrap()["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -334,4 +486,394 @@ async fn http_mcp_streamable_roundtrip() {
 
     client.cancel().await.ok();
     server_task.abort();
+}
+
+// ============================================================================
+// query tool — searchFTS + edge cases (qmd mcp.test.ts:285-320, 770-796)
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_returns_results_for_matching_query() {
+    let mcp = connect().await;
+    let r = query_lex(&mcp, "readme").await;
+    let res = structured_results(&r);
+    assert!(!res.is_empty());
+    assert_eq!(res[0]["file"], "docs/readme.md");
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_returns_empty_for_non_matching() {
+    let mcp = connect().await;
+    let r = query_lex(&mcp, "xyznonexistent").await;
+    assert!(structured_results(&r).is_empty());
+    assert!(text_blocks(&r).contains("No results found"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_respects_limit() {
+    let mcp = connect().await;
+    let r = mcp
+        .client
+        .call_tool(call(
+            "query",
+            json!({ "searches": [{ "type": "lex", "query": "meeting" }], "limit": 1, "rerank": false }),
+        ))
+        .await
+        .expect("query");
+    assert_eq!(structured_results(&r).len(), 1);
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_results_have_structured_shape() {
+    let mcp = connect().await;
+    let r = query_lex(&mcp, "readme").await;
+    let res = structured_results(&r);
+    assert!(!res.is_empty());
+    let item = &res[0];
+    assert!(item["docid"].is_string());
+    assert!(item["file"].is_string());
+    assert!(item["title"].is_string());
+    // 0..=1 holds only because rerank is off (skip-rerank sets score = 1.0/rank).
+    let score = item["score"].as_f64().expect("score number");
+    assert!((0.0..=1.0).contains(&score), "score out of range: {score}");
+    assert!(item["line"].is_number());
+    assert!(item["snippet"].is_string());
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_handles_empty_query() {
+    let mcp = connect().await;
+    let r = query_lex(&mcp, "").await;
+    assert!(structured_results(&r).is_empty());
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_handles_special_chars() {
+    let mcp = connect().await;
+    let r = query_lex(&mcp, "project's").await;
+    let _ = structured_results(&r); // array, no panic
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_handles_unicode() {
+    let mcp = connect().await;
+    let r = query_lex(&mcp, "文档").await;
+    let _ = structured_results(&r);
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_handles_very_long_query() {
+    let mcp = connect().await;
+    let long = "documentation ".repeat(100);
+    let r = query_lex(&mcp, &long).await;
+    let _ = structured_results(&r);
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn query_handles_stopwords() {
+    let mcp = connect().await;
+    let r = query_lex(&mcp, "the and or").await;
+    let _ = structured_results(&r);
+    mcp.shutdown().await;
+}
+
+// ============================================================================
+// get tool (qmd mcp.test.ts:441-512)
+// ============================================================================
+
+async fn get(mcp: &Mcp, args: Value) -> CallToolResult {
+    mcp.client.call_tool(call("get", args)).await.expect("get")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_by_display_path() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "docs/readme.md" })).await;
+    assert_eq!(r.is_error, Some(false));
+    let b = block(&r, 0);
+    assert_eq!(b["type"], "resource");
+    assert!(b["resource"]["text"].as_str().unwrap().contains("Project README"));
+    assert_eq!(b["resource"]["uri"], "qmd://docs/readme.md");
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_by_collection_relative_path() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "readme.md" })).await;
+    assert_eq!(r.is_error, Some(false));
+    assert!(block(&r, 0)["resource"]["text"].as_str().unwrap().contains("Project README"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_by_partial_path() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "api.md" })).await;
+    assert_eq!(r.is_error, Some(false));
+    assert!(block(&r, 0)["resource"]["text"].as_str().unwrap().contains("API Documentation"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_by_absolute_path() {
+    let mcp = connect().await;
+    let abs = mcp.tmp.path().join("docs").join("api.md");
+    let r = get(&mcp, json!({ "file": abs.to_string_lossy() })).await;
+    assert_eq!(r.is_error, Some(false));
+    assert!(block(&r, 0)["resource"]["text"].as_str().unwrap().contains("API Documentation"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_not_found() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "nonexistent.md" })).await;
+    assert_eq!(r.is_error, Some(true));
+    assert!(text_blocks(&r).to_lowercase().contains("not found"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_suggests_similar() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "readm.md" })).await; // typo
+    assert_eq!(r.is_error, Some(true));
+    let t = text_blocks(&r);
+    assert!(t.contains("Did you mean"), "missing suggestion header: {t}");
+    assert!(t.contains("readme.md"), "missing suggested file: {t}");
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_supports_line_suffix() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "readme.md:2" })).await;
+    assert_eq!(r.is_error, Some(false));
+    assert!(!block(&r, 0)["resource"]["text"].as_str().unwrap().contains("# Project README"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_supports_from_line() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "readme.md", "fromLine": 3 })).await;
+    assert_eq!(r.is_error, Some(false));
+    assert!(!block(&r, 0)["resource"]["text"].as_str().unwrap().contains("# Project README"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_supports_max_lines() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "api.md", "maxLines": 3 })).await;
+    assert_eq!(r.is_error, Some(false));
+    let text = block(&r, 0)["resource"]["text"].as_str().unwrap().to_string();
+    assert!(text.lines().count() <= 3, "expected <= 3 lines, got:\n{text}");
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_includes_context() {
+    let mcp = connect().await;
+    let r = get(&mcp, json!({ "file": "meetings/meeting-2024-01.md" })).await;
+    assert_eq!(r.is_error, Some(false));
+    assert!(
+        block(&r, 0)["resource"]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("<!-- Context: Meeting notes and transcripts -->")
+    );
+    mcp.shutdown().await;
+}
+
+// ============================================================================
+// multi_get tool (qmd mcp.test.ts:518-580)
+// ============================================================================
+
+async fn multi_get(mcp: &Mcp, args: Value) -> CallToolResult {
+    mcp.client.call_tool(call("multi_get", args)).await.expect("multi_get")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_get_by_glob() {
+    let mcp = connect().await;
+    let r = multi_get(&mcp, json!({ "pattern": "meetings/*.md" })).await;
+    assert_eq!(resource_blocks(&r).len(), 2);
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_get_by_comma_list() {
+    let mcp = connect().await;
+    let r = multi_get(&mcp, json!({ "pattern": "readme.md, api.md" })).await;
+    assert_eq!(resource_blocks(&r).len(), 2);
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_get_errors_for_missing_in_comma_list() {
+    let mcp = connect().await;
+    let r = multi_get(&mcp, json!({ "pattern": "readme.md, nonexistent.md" })).await;
+    assert_eq!(resource_blocks(&r).len(), 1);
+    assert!(text_blocks(&r).to_lowercase().contains("not found"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_get_skips_large_files() {
+    let mcp = connect().await;
+    let r = multi_get(&mcp, json!({ "pattern": "*.md", "maxBytes": 1000 })).await;
+    assert!(
+        text_blocks(&r).contains("[SKIPPED: docs/large-file.md"),
+        "expected large-file to be skipped:\n{}",
+        text_blocks(&r)
+    );
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_get_respects_max_lines() {
+    let mcp = connect().await;
+    let r = multi_get(&mcp, json!({ "pattern": "readme.md", "maxLines": 2 })).await;
+    let blocks = resource_blocks(&r);
+    assert_eq!(blocks.len(), 1);
+    let text = blocks[0]["resource"]["text"].as_str().unwrap();
+    assert!(text.contains("# Project README"));
+    assert!(!text.contains("This is the main readme"), "body past line 2 not truncated:\n{text}");
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_get_non_matching_glob() {
+    let mcp = connect().await;
+    let r = multi_get(&mcp, json!({ "pattern": "nonexistent/*.md" })).await;
+    // qmd surfaces this as a "No files matched" message (function-level returns
+    // it in `errors`); assert the text rather than the isError flag.
+    assert!(text_blocks(&r).contains("No files matched"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_get_includes_context() {
+    let mcp = connect().await;
+    let r = multi_get(&mcp, json!({ "pattern": "meetings/meeting-2024-01.md" })).await;
+    let blocks = resource_blocks(&r);
+    assert_eq!(blocks.len(), 1);
+    assert!(blocks[0]["resource"]["text"].as_str().unwrap().contains("<!-- Context:"));
+    mcp.shutdown().await;
+}
+
+// ============================================================================
+// status tool (qmd mcp.test.ts:586-600, adapted: rqmd seeds no embeddings)
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_returns_index_status() {
+    let mcp = connect().await;
+    let r = mcp.client.call_tool(call("status", json!({}))).await.expect("status");
+    let sc = r.structured_content.as_ref().expect("structuredContent");
+    assert_eq!(sc["totalDocuments"].as_i64().unwrap(), SEEDED_DOCS);
+    assert_eq!(sc["hasVectorIndex"], false);
+    let cols = sc["collections"].as_array().unwrap();
+    assert_eq!(cols.len(), 1);
+    assert!(cols[0]["path"].as_str().unwrap().replace('\\', "/").ends_with("docs"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_shows_documents_needing_embedding() {
+    let mcp = connect().await;
+    let r = mcp.client.call_tool(call("status", json!({}))).await.expect("status");
+    let sc = r.structured_content.as_ref().expect("structuredContent");
+    // No embeddings seeded, so every distinct content hash is pending.
+    let needs = sc["needsEmbedding"].as_i64().unwrap();
+    assert_eq!(needs, SEEDED_DOCS);
+    assert!(needs >= 1);
+    mcp.shutdown().await;
+}
+
+// ============================================================================
+// qmd:// resource via read_resource (qmd mcp.test.ts:606-763)
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_read_by_display_path() {
+    let mcp = connect().await;
+    let r = read(&mcp, "qmd://docs/readme.md").await;
+    assert!(resource_text(&r).contains("Project README"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_read_collection_relative() {
+    let mcp = connect().await;
+    let r = read(&mcp, "qmd://readme.md").await;
+    assert!(resource_text(&r).contains("Project README"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_read_url_encoded() {
+    let mcp = connect().await;
+    let r = read(&mcp, "qmd://meetings%2Fmeeting-2024-01.md").await;
+    assert!(resource_text(&r).contains("January Meeting"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_read_suffix_match() {
+    let mcp = connect().await;
+    let r = read(&mcp, "qmd://meeting-2024-01.md").await;
+    assert!(resource_text(&r).contains("January Meeting"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_not_found() {
+    let mcp = connect().await;
+    let r = read(&mcp, "qmd://nonexistent.md").await;
+    assert!(resource_text(&r).contains("Document not found"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_includes_context() {
+    let mcp = connect().await;
+    let r = read(&mcp, "qmd://meetings/meeting-2024-01.md").await;
+    assert!(resource_text(&r).contains("<!-- Context:"));
+    mcp.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resource_url_encoded_with_spaces() {
+    let mcp = connect().await;
+    let r = read(&mcp, "qmd://External%20Podcast%2F2023%20April%20-%20Interview.md").await;
+    assert!(resource_text(&r).contains("Podcast Episode"));
+    mcp.shutdown().await;
+}
+
+// ============================================================================
+// MCP spec compliance via real calls (qmd mcp.test.ts:817-889)
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn spec_get_resource_uri_is_encoded() {
+    let mcp = connect().await;
+    // encodeQmdPath through MCP: slashes preserved, spaces → %20, '-'/'.' kept.
+    let r = get(&mcp, json!({ "file": "External Podcast/2023 April - Interview.md" })).await;
+    assert_eq!(r.is_error, Some(false));
+    assert_eq!(
+        block(&r, 0)["resource"]["uri"],
+        "qmd://docs/External%20Podcast/2023%20April%20-%20Interview.md"
+    );
+    mcp.shutdown().await;
 }

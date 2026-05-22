@@ -488,6 +488,13 @@ pub async fn handle_get(store: &RqmdStore, args: Value) -> Result<CallToolResult
         text = format!("<!-- Context: {ctx} -->\n\n{text}");
     }
 
+    // qmd's `get` also sets non-spec `name`/`title` on the embedded resource
+    // (server.ts:418-423). Those are absent here on purpose: rmcp's
+    // `ResourceContents` is a strict spec enum (uri/mimeType/text/_meta only) with
+    // no name/title and no extension seam, and a compliant client strips them
+    // anyway. Sanctioned parity gap (like the `rqmd` server name); the data is
+    // recoverable from `uri` (encodes `display_path`) + the document title, and is
+    // covered at the function level by rqmd-core's `store_lookup` tests.
     let uri = format!("qmd://{}", encode_qmd_path(&found.display_path));
     let rc = ResourceContents::text(text, uri).with_mime_type("text/markdown");
     Ok(CallToolResult::success(vec![Content::resource(rc)]))

@@ -171,15 +171,23 @@ pub fn find_document(
     let row = match row {
         Some(r) => Some(r),
         None if !filepath.starts_with("qmd://") => {
+            // Normalize separators so absolute Windows paths (backslashes) match
+            // collection roots stored with the OS separator. Mirrors qmd's
+            // `normalizePathSeparators` (store.ts:383); compare normalized forms
+            // only — stored data is untouched, and the derived `rel` uses `/`
+            // like the handelized `documents.path`.
+            let norm_filepath = filepath.replace('\\', "/");
             let mut found = None;
             for coll in get_store_collections(conn)? {
-                let rel = if filepath.starts_with(&format!("{}/", coll.path)) {
-                    Some(filepath[coll.path.len() + 1..].to_string())
-                } else if !filepath.starts_with('/') {
-                    Some(filepath.clone())
-                } else {
-                    None
-                };
+                let norm_coll = coll.path.replace('\\', "/");
+                let rel =
+                    if let Some(stripped) = norm_filepath.strip_prefix(&format!("{norm_coll}/")) {
+                        Some(stripped.to_string())
+                    } else if !norm_filepath.starts_with('/') {
+                        Some(norm_filepath.clone())
+                    } else {
+                        None
+                    };
                 if let Some(rel) = rel {
                     let r = conn
                         .query_row(

@@ -159,6 +159,30 @@ fn find_document_expands_home_relative_path() {
     ));
 }
 
+#[test]
+fn find_document_by_absolute_path_normalizes_separators() {
+    let (_t, store) = open();
+    // Collection root stored with backslashes (as on Windows). The absolute-path
+    // branch must normalize separators to match the handelized `documents.path`;
+    // without normalization the backslash root never matches (fails even on Unix).
+    add_collection(&store, "docs", r"C:\data\docs");
+    insert(&store, "docs", "api.md", "API", "body");
+    assert!(
+        matches!(
+            find(&store, r"C:\data\docs\api.md", false),
+            FindDocumentOutcome::Found(_)
+        ),
+        "backslash absolute path should resolve"
+    );
+    assert!(
+        matches!(
+            find(&store, "C:/data/docs/api.md", false),
+            FindDocumentOutcome::Found(_)
+        ),
+        "forward-slash absolute path should resolve"
+    );
+}
+
 // ============================================================================
 // get_document_body
 // ============================================================================
