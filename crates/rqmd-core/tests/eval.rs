@@ -264,41 +264,64 @@ fn fts_hit_rate(store: &Store, queries: &[&EvalQuery], top_k: usize) -> f64 {
     hits as f64 / queries.len() as f64
 }
 
-fn bm25_store() -> (NamedTempFile, Store) {
+/// Print a PASS/FAIL score table for `metrics` (run with `-- --nocapture` to
+/// see it) and return the failure messages for any rate below its threshold.
+/// Shared by the BM25 and Vector/Hybrid suites.
+fn report_scores(label: &str, metrics: &[(&str, f64, f64)]) -> Vec<String> {
+    eprintln!("=== {label} eval scores ===");
+    let mut failures = Vec::new();
+    for (name, rate, threshold) in metrics {
+        let ok = *rate >= *threshold;
+        eprintln!(
+            "  [{}] {name:<22} {rate:.3}  (want >= {threshold})",
+            if ok { "PASS" } else { "FAIL" }
+        );
+        if !ok {
+            failures.push(format!("{name} = {rate:.3} (want >= {threshold})"));
+        }
+    }
+    failures
+}
+
+/// BM25 (FTS) suite — always runs, no model needed. Mirrors qmd's
+/// `describe("BM25 Search (FTS)")` (4 thresholds). Prints a score table and
+/// asserts every threshold at the end so all regressions surface at once.
+#[test]
+fn bm25_search() {
     let tmp = NamedTempFile::new().unwrap();
     let store = Store::open(tmp.path()).unwrap();
     index_docs(&store);
-    (tmp, store)
-}
 
-#[test]
-fn bm25_easy_queries_hit_at_3() {
-    let (_t, store) = bm25_store();
-    let rate = fts_hit_rate(&store, &by_difficulty(Easy), 3);
-    assert!(rate >= 0.8, "easy BM25 Hit@3 = {rate} (want >= 0.8)");
-}
-
-#[test]
-fn bm25_medium_queries_hit_at_3() {
-    // BM25 struggles with semantic queries.
-    let (_t, store) = bm25_store();
-    let rate = fts_hit_rate(&store, &by_difficulty(Medium), 3);
-    assert!(rate >= 0.15, "medium BM25 Hit@3 = {rate} (want >= 0.15)");
-}
-
-#[test]
-fn bm25_hard_queries_hit_at_5() {
-    let (_t, store) = bm25_store();
-    let rate = fts_hit_rate(&store, &by_difficulty(Hard), 5);
-    assert!(rate >= 0.15, "hard BM25 Hit@5 = {rate} (want >= 0.15)");
-}
-
-#[test]
-fn bm25_overall_hit_at_3() {
-    let (_t, store) = bm25_store();
     let all: Vec<&EvalQuery> = EVAL_QUERIES.iter().collect();
-    let rate = fts_hit_rate(&store, &all, 3);
-    assert!(rate >= 0.4, "overall BM25 Hit@3 = {rate} (want >= 0.4)");
+    let metrics: Vec<(&str, f64, f64)> = vec![
+        // easy: exact keyword matches.
+        (
+            "easy BM25 Hit@3",
+            fts_hit_rate(&store, &by_difficulty(Easy), 3),
+            0.8,
+        ),
+        // medium: BM25 struggles with semantic queries.
+        (
+            "medium BM25 Hit@3",
+            fts_hit_rate(&store, &by_difficulty(Medium), 3),
+            0.15,
+        ),
+        // hard: BM25 baseline.
+        (
+            "hard BM25 Hit@5",
+            fts_hit_rate(&store, &by_difficulty(Hard), 5),
+            0.15,
+        ),
+        // overall: BM25 baseline.
+        ("overall BM25 Hit@3", fts_hit_rate(&store, &all, 3), 0.4),
+    ];
+
+    let failures = report_scores("BM25", &metrics);
+    assert!(
+        failures.is_empty(),
+        "BM25 eval thresholds failed:\n  {}",
+        failures.join("\n  ")
+    );
 }
 
 // =============================================================================
@@ -405,13 +428,6 @@ async fn hybrid_hit_rate(
     hits as f64 / queries.len() as f64
 }
 
-/// Returns a failure message when `rate` is below `threshold`, else `None`.
-/// Lets the LLM test collect every regressed metric instead of aborting on the
-/// first `assert!` (the TS suite reports all failures via separate `test()`s).
-fn threshold_failure(name: &str, rate: f64, threshold: f64) -> Option<String> {
-    (rate < threshold).then(|| format!("{name} = {rate:.3} (want >= {threshold})"))
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn eval_vector_and_hybrid_search() {
     if skip_llm() {
@@ -504,37 +520,39 @@ async fn eval_vector_and_hybrid_search() {
         .filter(|q| q.difficulty != Fusion)
         .collect();
 
-    let mut failures: Vec<String> = Vec::new();
+    // (name, measured rate, threshold) for every metric — printed as a score
+    // table at the end and used to collect failures.
+    let mut metrics: Vec<(&str, f64, f64)> = Vec::new();
 
     // ---- Vector Search (describe("Vector Search")) ----
     // easy: vector should match keywords too.
     let r = vec_hit_rate(&store, llm_dyn.clone(), &model_uri, &easy, 3).await;
-    failures.extend(threshold_failure("easy vector Hit@3", r, 0.6));
+    metrics.push(("easy vector Hit@3", r, 0.6));
     // medium: vector excels at semantic.
     let r = vec_hit_rate(&store, llm_dyn.clone(), &model_uri, &medium, 3).await;
-    failures.extend(threshold_failure("medium vector Hit@3", r, 0.4));
+    metrics.push(("medium vector Hit@3", r, 0.4));
     // hard: vector helps with vague queries — Hit@5 (top_k = limit = 5).
     let r = vec_hit_rate(&store, llm_dyn.clone(), &model_uri, &hard, 5).await;
-    failures.extend(threshold_failure("hard vector Hit@5", r, 0.3));
+    metrics.push(("hard vector Hit@5", r, 0.3));
     // overall: vector baseline.
     let r = vec_hit_rate(&store, llm_dyn.clone(), &model_uri, &all, 3).await;
-    failures.extend(threshold_failure("overall vector Hit@3", r, 0.5));
+    metrics.push(("overall vector Hit@3", r, 0.5));
 
     // ---- Hybrid Search (RRF) (describe("Hybrid Search (RRF)")) ----
     // The real model is always present here, so qmd's `hasVectors=false`
     // fallback thresholds collapse to the with-vectors values.
     // easy: hybrid should match BM25.
     let r = hybrid_hit_rate(&store, llm_dyn.clone(), &model_uri, &easy, Some(3)).await;
-    failures.extend(threshold_failure("easy hybrid Hit@3", r, 0.8));
+    metrics.push(("easy hybrid Hit@3", r, 0.8));
     // medium: hybrid should outperform both BM25 and vector.
     let r = hybrid_hit_rate(&store, llm_dyn.clone(), &model_uri, &medium, Some(3)).await;
-    failures.extend(threshold_failure("medium hybrid Hit@3", r, 0.5));
+    metrics.push(("medium hybrid Hit@3", r, 0.5));
     // hard: `.some()` over the full fused list (≤10), per qmd's exact code.
     let r = hybrid_hit_rate(&store, llm_dyn.clone(), &model_uri, &hard, None).await;
-    failures.extend(threshold_failure("hard hybrid Hit@5", r, 0.35));
+    metrics.push(("hard hybrid Hit@5", r, 0.35));
     // overall (non-fusion queries; fusion is tested separately).
     let r = hybrid_hit_rate(&store, llm_dyn.clone(), &model_uri, &non_fusion, Some(3)).await;
-    failures.extend(threshold_failure("overall hybrid Hit@3", r, 0.6));
+    metrics.push(("overall hybrid Hit@3", r, 0.6));
 
     // fusion: RRF combines weak signals — must clear 50% AND beat the best
     // individual method. One pass computes all three rates.
@@ -577,8 +595,19 @@ async fn eval_vector_and_hybrid_search() {
     let hybrid_rate = hybrid_hits as f64 / n;
     let bm25_rate = bm25_hits as f64 / n;
     let vec_rate = vec_hits as f64 / n;
-    failures.extend(threshold_failure("fusion hybrid Hit@3", hybrid_rate, 0.5));
-    if hybrid_rate < bm25_rate.max(vec_rate) {
+    metrics.push(("fusion hybrid Hit@3", hybrid_rate, 0.5));
+
+    // Print the full score table (run with `-- --nocapture` to see it) and
+    // collect failures so one regressed threshold doesn't mask the others.
+    let mut failures = report_scores("Vector/Hybrid", &metrics);
+
+    // fusion: RRF must also match/beat the best individual method.
+    let beat_ok = hybrid_rate >= bm25_rate.max(vec_rate);
+    eprintln!(
+        "  [{}] fusion hybrid >= max(bm25,vec)  hybrid={hybrid_rate:.3} bm25={bm25_rate:.3} vec={vec_rate:.3}",
+        if beat_ok { "PASS" } else { "FAIL" }
+    );
+    if !beat_ok {
         failures.push(format!(
             "fusion hybrid {hybrid_rate:.3} should match/beat best of bm25 {bm25_rate:.3} / vec {vec_rate:.3}"
         ));
