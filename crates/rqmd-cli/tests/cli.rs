@@ -376,6 +376,47 @@ mod cli_search {
         e.run(&["search", "-n", "1", "test"]).assert_ok();
     }
 
+    // qmd parity (arg-order fix): flags may follow the query. Before the fix the
+    // trailing `-n 1` was swallowed into the query string. Here `meeting` reliably
+    // matches notes/meeting.md, so a successful run with the limit applied proves
+    // the flag was parsed rather than treated as a query token.
+    #[test]
+    fn searches_with_trailing_limit_option() {
+        let e = seeded();
+        let out = e.run(&["search", "meeting", "-n", "1"]);
+        out.assert_ok();
+        assert!(out.stdout.to_lowercase().contains("meeting"));
+    }
+
+    // A value-taking option immediately before the query: `-c` consumes `fixtures`
+    // and `meeting` remains the query (not swallowed by `-c`).
+    #[test]
+    fn searches_with_collection_flag_before_query() {
+        let e = seeded();
+        let out = e.run(&["search", "-c", "fixtures", "meeting"]);
+        out.assert_ok();
+        assert!(out.stdout.to_lowercase().contains("meeting"));
+    }
+
+    // `--json` after the query must be parsed as a format flag, yielding a JSON
+    // array — not folded into the query (which would print the default CLI format).
+    #[test]
+    fn searches_with_trailing_json_flag() {
+        let e = seeded();
+        let out = e.run(&["search", "meeting", "--json"]);
+        out.assert_ok();
+        let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("valid json");
+        assert!(v.is_array());
+    }
+
+    // A `-`-leading query token needs the `--` escape (otherwise clap rejects it
+    // as an unknown flag). `xyznonexistent` won't match, so we only assert it runs.
+    #[test]
+    fn searches_hyphen_leading_query_after_double_dash() {
+        let e = seeded();
+        e.run(&["search", "--", "-xyznonexistent123"]).assert_ok();
+    }
+
     #[test]
     fn searches_with_all_results_option() {
         let e = seeded();
@@ -1352,7 +1393,7 @@ mod custom_index_links {
         .assert_ok();
 
         // 2. Search that index: the JSON `file` carries `?index=<name>`.
-        //    Flags precede the (variadic) query so `--json` isn't swallowed.
+        //    Flags may sit on either side of the query now; here they precede it.
         let s = spawn_cache(
             &e.fixtures,
             cache.path(),
