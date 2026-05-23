@@ -435,7 +435,7 @@ mod cli_search {
     #[test]
     fn empty_json_array_for_non_matching_query() {
         let e = seeded();
-        let out = e.run(&["search", "--json", "xyznonexistent123"]);
+        let out = e.run(&["search", "xyznonexistent123", "--json"]);
         out.assert_ok();
         assert_eq!(out.stdout.trim(), "[]");
     }
@@ -443,7 +443,7 @@ mod cli_search {
     #[test]
     fn csv_header_only_for_non_matching_query() {
         let e = seeded();
-        let out = e.run(&["search", "--csv", "xyznonexistent123"]);
+        let out = e.run(&["search", "xyznonexistent123", "--csv"]);
         out.assert_ok();
         assert_eq!(
             out.stdout.trim(),
@@ -454,7 +454,7 @@ mod cli_search {
     #[test]
     fn empty_xml_for_non_matching_query() {
         let e = seeded();
-        let out = e.run(&["search", "--xml", "xyznonexistent123"]);
+        let out = e.run(&["search", "xyznonexistent123", "--xml"]);
         out.assert_ok();
         // rqmd emits no `<results>` wrapper for empty xml (qmd emitted
         // `<results></results>`).
@@ -464,7 +464,7 @@ mod cli_search {
     #[test]
     fn empty_md_for_non_matching_query() {
         let e = seeded();
-        let out = e.run(&["search", "--md", "xyznonexistent123"]);
+        let out = e.run(&["search", "xyznonexistent123", "--md"]);
         out.assert_ok();
         assert_eq!(out.stdout.trim(), "");
     }
@@ -472,7 +472,7 @@ mod cli_search {
     #[test]
     fn empty_files_for_non_matching_query() {
         let e = seeded();
-        let out = e.run(&["search", "--files", "xyznonexistent123"]);
+        let out = e.run(&["search", "xyznonexistent123", "--files"]);
         out.assert_ok();
         assert_eq!(out.stdout.trim(), "");
     }
@@ -481,7 +481,7 @@ mod cli_search {
     fn min_score_filters_default_output() {
         let e = seeded();
         // Scores are normalised 0..1, so --min-score 2 filters everything.
-        let out = e.run(&["search", "--min-score", "2", "test"]);
+        let out = e.run(&["search", "test", "--min-score", "2"]);
         out.assert_ok();
         // qmd parity: the cli "No results found." message goes to stdout.
         assert!(out.stdout.contains("No results"), "stdout: {}", out.stdout);
@@ -491,26 +491,26 @@ mod cli_search {
     fn min_score_format_safe_empty_output() {
         let e = seeded();
 
-        let json = e.run(&["search", "--json", "--min-score", "2", "test"]);
+        let json = e.run(&["search", "test", "--json", "--min-score", "2"]);
         json.assert_ok();
         assert_eq!(json.stdout.trim(), "[]");
 
-        let csv = e.run(&["search", "--csv", "--min-score", "2", "test"]);
+        let csv = e.run(&["search", "test", "--csv", "--min-score", "2"]);
         csv.assert_ok();
         assert_eq!(
             csv.stdout.trim(),
             "docid,score,file,title,context,line,snippet"
         );
 
-        let xml = e.run(&["search", "--xml", "--min-score", "2", "test"]);
+        let xml = e.run(&["search", "test", "--xml", "--min-score", "2"]);
         xml.assert_ok();
         assert_eq!(xml.stdout.trim(), "");
 
-        let md = e.run(&["search", "--md", "--min-score", "2", "test"]);
+        let md = e.run(&["search", "test", "--md", "--min-score", "2"]);
         md.assert_ok();
         assert_eq!(md.stdout.trim(), "");
 
-        let files = e.run(&["search", "--files", "--min-score", "2", "test"]);
+        let files = e.run(&["search", "test", "--files", "--min-score", "2"]);
         files.assert_ok();
         assert_eq!(files.stdout.trim(), "");
     }
@@ -534,7 +534,7 @@ mod cli_search {
     #[test]
     fn json_full_includes_line_field() {
         let e = seeded();
-        let out = e.run(&["search", "--json", "--full", "-n", "1", "meeting"]);
+        let out = e.run(&["search", "meeting", "--json", "--full", "-n", "1"]);
         out.assert_ok();
         let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("valid json");
         let arr = v.as_array().expect("array");
@@ -1192,7 +1192,7 @@ mod collection_ignore_patterns {
     #[test]
     fn ignored_files_are_not_searchable() {
         let e = seeded_with_ignore();
-        let out = e.run(&["search", "-n", "10", "session"]);
+        let out = e.run(&["search", "session", "-n", "10"]);
         out.assert_ok();
         assert!(!out.stdout.contains("session1"));
         assert!(!out.stdout.contains("session2"));
@@ -1201,7 +1201,7 @@ mod collection_ignore_patterns {
     #[test]
     fn non_ignored_files_are_searchable() {
         let e = seeded_with_ignore();
-        let out = e.run(&["search", "-n", "10", "personal", "note"]);
+        let out = e.run(&["search", "personal note", "-n", "10"]);
         out.assert_ok();
         assert!(out.stdout.contains("note1"), "stdout: {}", out.stdout);
     }
@@ -1260,7 +1260,7 @@ mod search_output_formats {
     #[test]
     fn json_includes_qmd_path_docid_and_context() {
         let e = seeded();
-        let out = e.run(&["search", "--json", "-n", "1", "test"]);
+        let out = e.run(&["search", "test", "--json", "-n", "1"]);
         out.assert_ok();
         let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("json");
         let r = &v.as_array().expect("array")[0];
@@ -1277,7 +1277,7 @@ mod search_output_formats {
     #[test]
     fn files_includes_path_docid_and_context() {
         let e = seeded();
-        let out = e.run(&["search", "--files", "-n", "1", "test"]);
+        let out = e.run(&["search", "test", "--files", "-n", "1"]);
         out.assert_ok();
         // Format: #docid,score,qmd://collection/path,"context" (qmd parity:
         // `outputResults` files branch uses the qmd:// URI, not a bare path).
@@ -1296,7 +1296,7 @@ mod search_output_formats {
     #[test]
     fn csv_includes_path_docid_and_context() {
         let e = seeded();
-        let out = e.run(&["search", "--csv", "-n", "1", "test"]);
+        let out = e.run(&["search", "test", "--csv", "-n", "1"]);
         out.assert_ok();
         assert!(
             out.stdout
@@ -1319,7 +1319,7 @@ mod search_output_formats {
     #[test]
     fn md_includes_docid_and_context() {
         let e = seeded();
-        let out = e.run(&["search", "--md", "-n", "1", "test"]);
+        let out = e.run(&["search", "test", "--md", "-n", "1"]);
         out.assert_ok();
         assert!(
             out.stdout.contains("**docid:** `#"),
@@ -1332,7 +1332,7 @@ mod search_output_formats {
     #[test]
     fn xml_includes_path_docid_and_context() {
         let e = seeded();
-        let out = e.run(&["search", "--xml", "-n", "1", "test"]);
+        let out = e.run(&["search", "test", "--xml", "-n", "1"]);
         out.assert_ok();
         assert!(
             out.stdout.contains("<file docid=\"#"),
@@ -1348,7 +1348,7 @@ mod search_output_formats {
     #[test]
     fn default_cli_format_includes_path_and_context() {
         let e = seeded();
-        let out = e.run(&["search", "-n", "1", "test"]);
+        let out = e.run(&["search", "test", "-n", "1"]);
         out.assert_ok();
         // qmd-parity cli format (non-TTY): a `qmd://` path line with docid, then
         // `Context:` and `Score:` lines. NO_COLOR + non-TTY ⇒ no ANSI / OSC-8.
@@ -1393,12 +1393,12 @@ mod custom_index_links {
         .assert_ok();
 
         // 2. Search that index: the JSON `file` carries `?index=<name>`.
-        //    Flags may sit on either side of the query now; here they precede it.
+        //    Flags may sit on either side of the query now; here they follow it.
         let s = spawn_cache(
             &e.fixtures,
             cache.path(),
             &e.config_dir,
-            &["--index", idx, "search", "--json", "-n", "1", "test"],
+            &["--index", idx, "search", "test", "--json", "-n", "1"],
         );
         s.assert_ok();
         let v: serde_json::Value = serde_json::from_str(&s.stdout).expect("json");
