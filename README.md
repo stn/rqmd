@@ -1,28 +1,166 @@
 # rqmd
 
-Rust port of [tobi/qmd](https://github.com/tobi/qmd) — an on-device hybrid search
-engine for markdown that combines BM25 (SQLite FTS5), vector semantic search, and
-local LLM re-ranking.
+On-device hybrid search for your markdown — notes, meeting transcripts, docs,
+knowledge bases, whatever you need to remember.
 
-> **Status:** Project skeleton only. Implementation is in progress and the CLI
-> currently prints a placeholder message.
+A Rust port of [tobi/qmd](https://github.com/tobi/qmd) by Tobi Lütke. It keeps
+qmd's design and search pipeline; it just runs as a native binary.
+
+rqmd combines BM25 full-text search (SQLite FTS5), vector semantic search, and
+local LLM re-ranking — all on-device via
+[llama.cpp](https://github.com/ggerganov/llama.cpp) with GGUF models. Nothing
+leaves your machine.
+
+## Why a Rust port?
+
+The original qmd runs on Node/Bun, which on Windows effectively means running
+inside WSL2 — native SQLite FTS extensions and `node-llama-cpp` are painful to
+get working on bare Windows. rqmd compiles to a **single self-contained native
+binary** that runs the same way on Windows, macOS, and Linux, with no JS runtime
+and no WSL2. Along the way it also gains native tree-sitter grammars (no WASM)
+and an HTTP daemon that keeps models warm in VRAM across requests.
+
+## Features
+
+- **Three search modes** — `search` (BM25 keyword), `vsearch` (vector + query
+  expansion), and `query` (hybrid BM25 + vector + RRF fusion + LLM rerank).
+- **Smart chunking** — semantic break detection (headings, code blocks, lists)
+  with optional tree-sitter AST awareness for code (TS/JS/Python/Go/Rust).
+- **Collections & context** — index folders of markdown, attach human-written
+  context summaries to paths.
+- **MCP server** — stdio for editors/agents, plus an HTTP daemon that keeps
+  models warm in VRAM across requests.
+- **Multiple output formats** — `--json`, `--csv`, `--md`, `--xml`, `--files`.
+- **Bundled Claude skill** — `rqmd --skill` / `rqmd skill install`.
+
+## Requirements
+
+Building from source compiles llama.cpp and the tree-sitter grammars, so you
+need a toolchain:
+
+- A recent stable **Rust** (edition 2024).
+- A **C/C++ compiler and CMake** (llama.cpp is built from source). On Windows
+  this means the **MSVC Build Tools** with the "Desktop development with C++"
+  workload.
+- **~2 GB of free disk** for the GGUF models (downloaded on first LLM use), plus
+  a few GB of RAM to load them. The first build is slow.
+
+## Install
+
+Not on crates.io yet, so install straight from the repo — this builds from
+source and puts the `rqmd` binary in `~/.cargo/bin`:
+
+```sh
+cargo install --git https://github.com/stn/rqmd rqmd-cli
+```
+
+Or from a local clone:
+
+```sh
+cargo install --path crates/rqmd-cli
+```
+
+GPU acceleration is opt-in; the default install is **CPU-only**. Add a backend
+feature to either command:
+
+```sh
+cargo install --path crates/rqmd-cli --features metal    # macOS
+cargo install --path crates/rqmd-cli --features cuda     # NVIDIA
+cargo install --path crates/rqmd-cli --features vulkan   # cross-vendor
+```
+
+At runtime, `--no-gpu` forces CPU even on a GPU build. For development, run from
+a clone with `cargo run -p rqmd-cli -- <args>`.
+
+## Quickstart
+
+```sh
+rqmd collection add ./notes --name notes   # index a folder of markdown
+rqmd update                                 # (re)index all collections
+rqmd pull                                   # download the models (optional; else lazy)
+rqmd embed                                  # build vector embeddings
+rqmd status                                 # check index health
+
+rqmd search "kafka rebalance"               # fast BM25 keyword search (no models)
+rqmd query "why did we pick postgres"       # best quality (hybrid + rerank)
+rqmd get notes/decisions.md --from 40 -l 20 # fetch a document slice
+```
+
+`search` works immediately. `vsearch` and `query` need embeddings (`rqmd embed`)
+and will download the models on first run.
+
+## Search modes
+
+| Command   | What it does                                              | LLM needed |
+|-----------|----------------------------------------------------------|------------|
+| `search`  | BM25 lexical search over FTS5.                            | no         |
+| `vsearch` | Vector similarity search with automatic query expansion. | yes        |
+| `query`   | Hybrid: BM25 + vector, fused via RRF, then LLM reranked.  | yes        |
+
+Common flags: `-c <collection>` (repeatable), `-n <limit>`, `--all`,
+`--min-score`, `--full`, `--explain` (scoring breakdown). Run
+`rqmd <command> --help` for the full set.
+
+## MCP server
+
+```sh
+rqmd mcp                          # stdio (Claude Code, Claude Desktop, Inspector)
+rqmd mcp --http --port 8181       # foreground HTTP server (Streamable HTTP at /mcp)
+rqmd mcp --daemon                 # background HTTP (writes a PID file); implies --http
+rqmd mcp stop                     # stop the running daemon
+```
+
+Tools exposed: `query`, `get`, `multi_get`, `status`. Documents are served as
+`qmd://…` resources. For agent setup, see `rqmd --skill` (the bundled skill
+covers Claude Code / Desktop integration).
+
+## Models
+
+Defaults (overridable via `QMD_EMBED_MODEL` / `QMD_GENERATE_MODEL` /
+`QMD_RERANK_MODEL`):
+
+| Role            | Model                                                  | Size    |
+|-----------------|--------------------------------------------------------|---------|
+| Embedding       | `embeddinggemma-300M` (Q8_0 GGUF)                      | ~300 MB |
+| Query expansion | `qmd-query-expansion-1.7B` — Tobi's fine-tune (Q4_K_M) | ~1.1 GB |
+| Reranking       | `Qwen3-Reranker-0.6B` (Q8_0 GGUF)                      | ~640 MB |
+
+## Where data lives
+
+- **Index** (SQLite): `~/.cache/rqmd/<index>.sqlite`. Override with
+  `--index <name>`, `RQMD_INDEX_PATH`, or `RQMD_CACHE_DIR`.
+- **Config** (YAML): `~/.config/rqmd/<index>.yml` (or `RQMD_CONFIG_DIR`).
+- **Models** (GGUF): the platform cache dir under `qmd/models` —
+  `~/Library/Caches/qmd/models` on macOS, `~/.cache/qmd/models` on Linux, or
+  `$XDG_CACHE_HOME/qmd/models`. (Models keep qmd's `qmd` namespace for cache
+  compatibility; rqmd's own data uses `rqmd`.)
 
 ## Workspace layout
 
-| Crate       | Role                                                                       | Maps to (qmd)                                           |
-|-------------|----------------------------------------------------------------------------|---------------------------------------------------------|
-| `rqmd-core`  | Search engine core — store, db, chunking, collections, AST, LLM, store-ops | `src/store.ts`, `src/db.ts`, `src/ast.ts`, `src/llm.ts` |
-| `rqmd-mcp`   | MCP server (library, launched via `rqmd mcp`)                               | `src/mcp/server.ts`                                     |
-| `rqmd-cli`   | CLI binary (`rqmd`) — subcommands `search`, `mcp`, etc.                     | `src/cli/qmd.ts`                                        |
+| Crate       | Role                                                                 | Maps to (qmd)                                            |
+|-------------|---------------------------------------------------------------------|---------------------------------------------------------|
+| `rqmd-core` | Engine: store (FTS5/db/chunking/AST), store-ops (hybrid/rerank/expand/embed), llm (llama.cpp), bench | `src/store.ts`, `src/db.ts`, `src/ast.ts`, `src/llm.ts` |
+| `rqmd-mcp`  | MCP server library (stdio + HTTP), launched via `rqmd mcp`          | `src/mcp/server.ts`                                      |
+| `rqmd-cli`  | The `rqmd` binary and all subcommands                               | `src/cli/qmd.ts`                                         |
 
-## Build
+## Differences from qmd
 
-```sh
-cargo build --workspace
-cargo run --bin rqmd
-```
+The port aims to be faithful, not byte-identical. Notable divergences:
 
-## License
+- The MCP server identifies itself as `rqmd`, not `qmd`.
+- Tree-sitter uses native Rust grammars rather than WASM.
+- `rqmd mcp --daemon` always implies `--http`.
+- `rqmd update` does not shell out; `collection update-cmd` is stored but not
+  executed, so run any pre-update commands (e.g. `git pull`) yourself.
+- Model env vars keep the `QMD_` prefix for compatibility; rqmd-specific vars
+  (config/index/cache) use the `RQMD_` prefix.
 
-MIT. See [LICENSE](LICENSE). The original qmd is MIT-licensed by Tobi Lutke
-(2024-2026); this Rust port inherits and complies with that license.
+## Credits & License
+
+This project stands on the shoulders of [qmd](https://github.com/tobi/qmd) — its
+design, search pipeline, and the query-expansion model are Tobi Lütke's work.
+Thank you.
+
+Licensed under the [MIT License](LICENSE) © 2026 Akira Ishino. The original qmd
+is also MIT-licensed © 2024–2026 Tobi Lütke; this Rust port inherits and complies
+with that license.
