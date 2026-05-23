@@ -333,8 +333,12 @@ pub struct SearchArgs {
     pub flags: SearchFlags,
     #[command(flatten)]
     pub format: FormatFlags,
-    /// Query string (positional, joined by spaces).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    /// Query string (positional, joined by spaces). Flags may appear before or
+    /// after the query words; all non-flag tokens are joined as the query
+    /// (qmd parity, matching the documented SKILL.md usage). A query token
+    /// starting with `-` must be escaped via `--`, e.g. `rqmd search -- -foo`.
+    /// Value-taking options consume the next token (e.g. `-c concepts meeting`
+    /// → collection=concepts, query=meeting), so place such flags accordingly.
     pub query: Vec<String>,
 }
 
@@ -347,8 +351,12 @@ pub struct VsearchArgs {
     /// Domain intent (steers the vector / hyde expansion).
     #[arg(long)]
     pub intent: Option<String>,
-    /// Query string (positional, joined by spaces).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    /// Query string (positional, joined by spaces). Flags may appear before or
+    /// after the query words; all non-flag tokens are joined as the query
+    /// (qmd parity, matching the documented SKILL.md usage). A query token
+    /// starting with `-` must be escaped via `--`, e.g. `rqmd search -- -foo`.
+    /// Value-taking options consume the next token (e.g. `-c concepts meeting`
+    /// → collection=concepts, query=meeting), so place such flags accordingly.
     pub query: Vec<String>,
 }
 
@@ -373,8 +381,12 @@ pub struct QueryArgs {
     /// Chunking strategy override (reuses the `embed` enum).
     #[arg(long = "chunk-strategy", value_enum)]
     pub chunk_strategy: Option<ChunkStrategyArg>,
-    /// Query string (positional, joined by spaces).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    /// Query string (positional, joined by spaces). Flags may appear before or
+    /// after the query words; all non-flag tokens are joined as the query
+    /// (qmd parity, matching the documented SKILL.md usage). A query token
+    /// starting with `-` must be escaped via `--`, e.g. `rqmd search -- -foo`.
+    /// Value-taking options consume the next token (e.g. `-c concepts meeting`
+    /// → collection=concepts, query=meeting), so place such flags accordingly.
     pub query: Vec<String>,
 }
 
@@ -470,6 +482,99 @@ impl From<ChunkStrategyArg> for ChunkStrategy {
             ChunkStrategyArg::Auto => ChunkStrategy::Auto,
             ChunkStrategyArg::Regex => ChunkStrategy::Regex,
         }
+    }
+}
+
+#[cfg(test)]
+mod arg_order_tests {
+    //! Argument-order parsing for `search`/`vsearch`/`query`. Guards the qmd
+    //! parity fix: the variadic `query` positional carries no `trailing_var_arg`
+    //! / `allow_hyphen_values`, so flags parse before *or after* the query words
+    //! instead of being swallowed. `vsearch`/`query` have no e2e coverage (they
+    //! need local models), so these unit tests are their only arg-parse guard.
+    use super::*;
+
+    /// Parse argv into a `Command`, surfacing the clap error in the panic.
+    fn cmd(argv: &[&str]) -> Command {
+        Cli::try_parse_from(argv)
+            .unwrap_or_else(|e| panic!("parse failed for {argv:?}: {e}"))
+            .command
+            .expect("subcommand present")
+    }
+
+    #[test]
+    fn search_flag_after_query_is_parsed_not_swallowed() {
+        let Command::Search(a) = cmd(&["rqmd", "search", "foo", "bar", "-n", "5"]) else {
+            panic!("expected search");
+        };
+        assert_eq!(a.query, ["foo", "bar"]);
+        assert_eq!(a.flags.limit, Some(5));
+    }
+
+    #[test]
+    fn search_flag_before_query_still_works() {
+        let Command::Search(a) = cmd(&["rqmd", "search", "-n", "5", "foo", "bar"]) else {
+            panic!("expected search");
+        };
+        assert_eq!(a.query, ["foo", "bar"]);
+        assert_eq!(a.flags.limit, Some(5));
+    }
+
+    #[test]
+    fn search_value_option_consumes_next_token_then_query() {
+        // `-c concepts meeting` → collection=[concepts], query=[meeting].
+        let Command::Search(a) = cmd(&["rqmd", "search", "-c", "concepts", "meeting"]) else {
+            panic!("expected search");
+        };
+        assert_eq!(a.flags.collection, ["concepts"]);
+        assert_eq!(a.query, ["meeting"]);
+    }
+
+    #[test]
+    fn search_format_flag_after_query() {
+        let Command::Search(a) = cmd(&["rqmd", "search", "foo", "--json"]) else {
+            panic!("expected search");
+        };
+        assert_eq!(a.query, ["foo"]);
+        assert!(a.format.json);
+    }
+
+    #[test]
+    fn search_hyphen_leading_query_needs_double_dash_escape() {
+        // Bare `-foo` is an unknown flag (exit 2); `-- -foo` is taken literally.
+        assert!(Cli::try_parse_from(["rqmd", "search", "-foo"]).is_err());
+        let Command::Search(a) = cmd(&["rqmd", "search", "--", "-foo"]) else {
+            panic!("expected search");
+        };
+        assert_eq!(a.query, ["-foo"]);
+    }
+
+    #[test]
+    fn vsearch_flag_after_query_is_parsed() {
+        let Command::Vsearch(a) = cmd(&["rqmd", "vsearch", "foo", "bar", "-n", "3"]) else {
+            panic!("expected vsearch");
+        };
+        assert_eq!(a.query, ["foo", "bar"]);
+        assert_eq!(a.flags.limit, Some(3));
+    }
+
+    #[test]
+    fn query_flag_after_query_is_parsed() {
+        let Command::Query(a) = cmd(&["rqmd", "query", "foo", "bar", "-n", "7"]) else {
+            panic!("expected query");
+        };
+        assert_eq!(a.query, ["foo", "bar"]);
+        assert_eq!(a.flags.limit, Some(7));
+    }
+
+    #[test]
+    fn query_intent_flag_after_query_is_parsed() {
+        let Command::Query(a) = cmd(&["rqmd", "query", "decision", "quality", "--intent", "find"])
+        else {
+            panic!("expected query");
+        };
+        assert_eq!(a.query, ["decision", "quality"]);
+        assert_eq!(a.intent.as_deref(), Some("find"));
     }
 }
 
