@@ -49,6 +49,89 @@ mod cli_help {
 }
 
 // ===========================================================================
+// CLI Init (`rqmd init` — project-local `.rqmd` index)
+// ===========================================================================
+mod cli_init {
+    use crate::common::*;
+
+    #[test]
+    fn creates_local_index_with_empty_collections_and_seeded_models() {
+        let e = env();
+        let project = e.root.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let out = e.run_in_env(&project, &["init"], &[]);
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("ready to go with new local index"),
+            "stdout: {}",
+            out.stdout
+        );
+
+        let cfg = project.join(".rqmd").join("index.yml");
+        let db = project.join(".rqmd").join("index.sqlite");
+        assert!(cfg.is_file(), "config not created");
+        assert!(db.is_file(), "sqlite not created");
+
+        let yaml = std::fs::read_to_string(&cfg).unwrap();
+        // Parity with qmd `init`: a fresh config serializes an empty collections
+        // map. Guards against a future `skip_serializing_if` on the field that
+        // would silently break drop-in parity.
+        assert!(yaml.contains("collections: {}"), "yaml:\n{yaml}");
+        // Models seeded (env > crate default): all three keys present.
+        assert!(yaml.contains("embed:"), "yaml:\n{yaml}");
+        assert!(yaml.contains("generate:"), "yaml:\n{yaml}");
+        assert!(yaml.contains("rerank:"), "yaml:\n{yaml}");
+    }
+
+    #[test]
+    fn seeds_models_from_env_override() {
+        let e = env();
+        let project = e.root.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let out = e.run_in_env(
+            &project,
+            &["init"],
+            &[("QMD_EMBED_MODEL", "hf:example/custom-embed.gguf")],
+        );
+        out.assert_ok();
+
+        let yaml = std::fs::read_to_string(project.join(".rqmd").join("index.yml")).unwrap();
+        assert!(
+            yaml.contains("hf:example/custom-embed.gguf"),
+            "env override not seeded; yaml:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn refuses_to_initialize_in_home() {
+        let e = env();
+        let home = e.root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let home_str = home.to_str().unwrap();
+
+        // cwd == HOME == USERPROFILE → the $HOME guard trips and nothing is made.
+        let out = e.run_in_env(
+            &home,
+            &["init"],
+            &[("HOME", home_str), ("USERPROFILE", home_str)],
+        );
+        out.assert_err();
+        assert!(
+            out.stderr
+                .contains("Refusing to initialize a local index in $HOME"),
+            "stderr: {}",
+            out.stderr
+        );
+        assert!(
+            !home.join(".rqmd").exists(),
+            ".rqmd must not be created in $HOME"
+        );
+    }
+}
+
+// ===========================================================================
 // CLI Skills (bundled runtime skill — `skills list/get/path`)
 // ===========================================================================
 mod cli_skills {

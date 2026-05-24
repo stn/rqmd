@@ -91,6 +91,13 @@ impl Env {
         spawn(cwd, &self.db, &self.config_dir, &full, &[])
     }
 
+    /// Run from an explicit cwd with extra env overrides and *no* `--index`
+    /// prepend. Used by `rqmd init` tests, which are index-agnostic and need to
+    /// control `HOME`/`USERPROFILE` to exercise the `$HOME` guard.
+    pub fn run_in_env(&self, cwd: &Path, args: &[&str], extra: &[(&str, &str)]) -> Out {
+        spawn(cwd, &self.db, &self.config_dir, args, extra)
+    }
+
     /// Like [`run`](Self::run) but with extra environment overrides applied
     /// last (so they win over the defaults — used to point at a custom
     /// `RQMD_INDEX_PATH`).

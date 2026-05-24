@@ -474,6 +474,14 @@ impl Config {
         self.save()
     }
 
+    /// Replace the `models:` section and persist. No-op save for inline
+    /// configs. Used by `rqmd init` to seed env/default-resolved models into a
+    /// freshly created local config (mirrors qmd `saveConfig({ models })`).
+    pub fn set_models(&mut self, models: ModelsConfig) -> Result<()> {
+        self.inner.models = Some(models);
+        self.save()
+    }
+
     pub fn contexts(&self, collection: &str) -> Option<&ContextMap> {
         self.inner
             .collections
