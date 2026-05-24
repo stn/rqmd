@@ -40,6 +40,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Initialize a project-local index (`.rqmd/index.yml` + `index.sqlite`).
+    Init,
+
     /// Manage indexed collections (folders of markdown).
     #[command(subcommand)]
     Collection(CollectionCmd),

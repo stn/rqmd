@@ -7,6 +7,7 @@ pub mod context;
 pub mod doctor;
 pub mod embed;
 pub mod get;
+pub mod init;
 pub mod ls;
 pub mod mcp;
 pub mod multi_get;

@@ -74,6 +74,7 @@ async fn run() -> Result<()> {
     // must come after the match. Panics still skip `close` — same as pre-PR
     // behaviour; the OS reclaims worker threads on process exit.
     let result: Result<()> = match command {
+        Command::Init => commands::init::run(&palette),
         Command::Collection(sub) => commands::collection::run(sub, &mut state, &palette),
         Command::Context(sub) => commands::context::run(sub, &mut state, &palette),
         Command::Get(a) => commands::get::run(a, &mut state, &palette),
