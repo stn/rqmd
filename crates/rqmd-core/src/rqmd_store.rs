@@ -52,7 +52,7 @@ use crate::store::lookup::{
     FindDocumentOptions, FindDocumentOutcome, FindDocumentsOptions, FindDocumentsResult,
     find_document, find_documents, get_document_body,
 };
-use crate::store::reindex::{ReindexProgress, reindex_collection};
+use crate::store::reindex::{ReindexProgress, global_qmdignore_files, reindex_collection};
 use crate::store::search::{SearchResult, search_fts};
 use crate::store::status::{IndexHealthInfo, IndexStatus};
 use crate::store::store_config::{
@@ -633,6 +633,9 @@ impl RqmdStore {
             ..UpdateResult::default()
         };
 
+        // Resolved once and shared across all collections (lowest precedence).
+        let global_ignore = global_qmdignore_files();
+
         for coll in &selected {
             let path = PathBuf::from(&coll.path);
             let ignore = coll.ignore.clone().unwrap_or_default();
@@ -647,6 +650,7 @@ impl RqmdStore {
                     &pattern,
                     &name,
                     &ignore,
+                    &global_ignore,
                     |info: &ReindexProgress| {
                         if let Some(p) = progress.as_ref() {
                             p(UpdateProgress {
