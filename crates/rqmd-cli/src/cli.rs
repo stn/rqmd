@@ -281,6 +281,12 @@ pub struct GetArgs {
     /// Prefix each line with its line number.
     #[arg(long = "line-numbers")]
     pub line_numbers: bool,
+    /// Accepted for qmd drop-in parity; has no effect. Full output is the
+    /// default — `get` always prints the whole document; slice with
+    /// `--from` / `-l`. Upstream qmd also ignores `--full` for `get`
+    /// (its arg parser runs with `strict: false`).
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Debug, Args)]

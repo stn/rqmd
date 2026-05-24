@@ -807,6 +807,19 @@ mod cli_get {
         let out = e.run(&["get", "README.md", "--from", "-19"]);
         out.assert_err();
     }
+
+    // `--full` は qmd parity のための no-op。素の `get` と同一出力で、
+    // スライス挙動も変えてはならない（将来 `full` をスライスに配線する誤りを防ぐ）。
+    #[test]
+    fn accepts_full_flag_as_noop_for_qmd_parity() {
+        let e = seeded();
+        let plain = e.run(&["get", "README.md"]);
+        let full = e.run(&["get", "README.md", "--full"]);
+        plain.assert_ok();
+        full.assert_ok();
+        assert_eq!(plain.stdout, full.stdout);
+        assert!(full.stderr.is_empty());
+    }
 }
 
 // ===========================================================================
