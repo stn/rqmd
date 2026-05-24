@@ -426,6 +426,10 @@ impl LlamaCpp {
 
 #[async_trait]
 impl Llm for LlamaCpp {
+    fn embed_context_size(&self) -> usize {
+        self.embed_context_size
+    }
+
     async fn embed(&self, text: &str, opts: EmbedOptions) -> Result<Option<EmbeddingResult>> {
         // TS `embed()` does NOT check ciMode (only embedBatch / generate /
         // expandQuery / rerank do). Mirror that.

@@ -4,6 +4,12 @@
 //! * `embed` / `embed_batch` — deterministic per-text vectors. SHA-256 of
 //!   the text seeds a `dim`-length `f32` slice in `[-1, 1]`. Tests that need
 //!   custom vectors can pre-populate `embed_overrides`.
+//! * Failure injection (for embed-resilience tests): `fail_embed_after(n)`
+//!   makes the first `n` `embed` calls succeed and the rest return `Ok(None)`;
+//!   `fail_embed_batch_from(k)` makes each `embed_batch` call return `None`
+//!   for indices `>= k`. `embed_batch` builds vectors directly (it does NOT
+//!   route through `embed`), so the two knobs are independent and the
+//!   per-call `embed` budget is consumed only by real `embed` calls.
 //! * `expand_query` — returns the canned response for `query` if registered,
 //!   otherwise a synthetic `[hyde, vec]` pair.
 //! * `rerank` — uses `rerank_overrides` keyed on chunk text; falls back to
@@ -37,6 +43,13 @@ pub struct MockLlm {
     pub expand_overrides: Mutex<std::collections::HashMap<String, Vec<Queryable>>>,
     pub rerank_overrides: Mutex<std::collections::HashMap<String, f32>>,
 
+    /// When `Some(n)`, `embed` returns `Ok(Some(_))` for the first `n` calls
+    /// and `Ok(None)` thereafter. `None` = always succeed.
+    pub embed_fail_after: Mutex<Option<usize>>,
+    /// When `Some(k)`, each `embed_batch` call returns `None` for slots at
+    /// index `>= k` (and `Some(_)` below). `None` = all slots succeed.
+    pub embed_batch_fail_from: Mutex<Option<usize>>,
+
     pub embed_calls: AtomicUsize,
     pub embed_batch_calls: AtomicUsize,
     pub expand_calls: AtomicUsize,
@@ -53,6 +66,8 @@ impl MockLlm {
             embed_overrides: Mutex::new(Default::default()),
             expand_overrides: Mutex::new(Default::default()),
             rerank_overrides: Mutex::new(Default::default()),
+            embed_fail_after: Mutex::new(None),
+            embed_batch_fail_from: Mutex::new(None),
             embed_calls: AtomicUsize::new(0),
             embed_batch_calls: AtomicUsize::new(0),
             expand_calls: AtomicUsize::new(0),
@@ -87,6 +102,25 @@ impl MockLlm {
             .unwrap()
             .insert(chunk.into(), score);
     }
+
+    /// First `n` `embed` calls succeed; subsequent calls return `Ok(None)`.
+    pub fn fail_embed_after(&self, n: usize) {
+        *self.embed_fail_after.lock().unwrap() = Some(n);
+    }
+
+    /// Each `embed_batch` call returns `None` for slots at index `>= k`.
+    pub fn fail_embed_batch_from(&self, k: usize) {
+        *self.embed_batch_fail_from.lock().unwrap() = Some(k);
+    }
+
+    fn vector_for(&self, text: &str) -> Vec<f32> {
+        self.embed_overrides
+            .lock()
+            .unwrap()
+            .get(text)
+            .cloned()
+            .unwrap_or_else(|| deterministic_embedding(text, self.embed_dim))
+    }
 }
 
 fn deterministic_embedding(text: &str, dim: usize) -> Vec<f32> {
@@ -116,16 +150,14 @@ impl Llm for MockLlm {
         text: &str,
         _opts: EmbedOptions,
     ) -> rqmd_core::llm::error::Result<Option<EmbeddingResult>> {
-        self.embed_calls.fetch_add(1, Ordering::Relaxed);
-        let v = self
-            .embed_overrides
-            .lock()
-            .unwrap()
-            .get(text)
-            .cloned()
-            .unwrap_or_else(|| deterministic_embedding(text, self.embed_dim));
+        let call_n = self.embed_calls.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(limit) = *self.embed_fail_after.lock().unwrap()
+            && call_n > limit
+        {
+            return Ok(None);
+        }
         Ok(Some(EmbeddingResult {
-            embedding: v,
+            embedding: self.vector_for(text),
             model: "mock".into(),
         }))
     }
@@ -133,12 +165,22 @@ impl Llm for MockLlm {
     async fn embed_batch(
         &self,
         texts: &[String],
-        opts: EmbedOptions,
+        _opts: EmbedOptions,
     ) -> rqmd_core::llm::error::Result<Vec<Option<EmbeddingResult>>> {
         self.embed_batch_calls.fetch_add(1, Ordering::Relaxed);
+        // Build vectors directly (not via `embed`) so the `embed_fail_after`
+        // budget and `embed_calls` counter are not consumed by batch slots.
+        let fail_from = *self.embed_batch_fail_from.lock().unwrap();
         let mut out = Vec::with_capacity(texts.len());
-        for t in texts {
-            out.push(self.embed(t, opts.clone()).await?);
+        for (i, t) in texts.iter().enumerate() {
+            if fail_from.is_some_and(|k| i >= k) {
+                out.push(None);
+            } else {
+                out.push(Some(EmbeddingResult {
+                    embedding: self.vector_for(t),
+                    model: "mock".into(),
+                }));
+            }
         }
         Ok(out)
     }

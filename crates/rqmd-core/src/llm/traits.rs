@@ -91,6 +91,15 @@ pub trait Llm: Send + Sync {
         Ok(self.tokenize(text).await?.len())
     }
 
+    /// Token capacity of the embedding context, used by
+    /// `generate_embeddings` to warn when chunks may exceed a single
+    /// embed-pool ubatch. The default returns `usize::MAX` ("unconstrained"),
+    /// so non-`LlamaCpp` impls (mocks, fakes) never trip the warning;
+    /// [`crate::llm::llama_cpp::LlamaCpp`] overrides it with the real value.
+    fn embed_context_size(&self) -> usize {
+        usize::MAX
+    }
+
     /// Tear down workers and release native resources. Idempotent.
     /// In-flight operations are given up to ~30s to drain before
     /// dispose proceeds (see [`crate::llm::llama_cpp::LlamaCpp::dispose`]).
