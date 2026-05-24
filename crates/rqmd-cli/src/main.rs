@@ -85,7 +85,7 @@ async fn run() -> Result<()> {
         Command::Cleanup => commands::cleanup::run(&mut state, &palette),
 
         Command::Pull(a) => commands::pull::run(a, &mut state, &palette).await,
-        Command::Embed(a) => commands::embed::run(a, &mut state, &palette).await,
+        Command::Embed(a) => commands::embed::run(a, &mut state).await,
         Command::Search(a) => commands::search::run(a, &mut state, &palette),
         Command::Vsearch(a) => commands::vsearch::run(a, &mut state, &palette).await,
         Command::Query(a) => commands::query::run(a, &mut state, &palette).await,

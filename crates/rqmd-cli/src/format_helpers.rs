@@ -21,6 +21,64 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Human-readable elapsed/ETA. Port of qmd `formatETA` (`src/cli/qmd.ts:311`):
+/// `<60s` → `Ns`; `<3600s` → `Nm Ns`; else `Nh Nm`. Rounding matches JS
+/// `Math.round`/`Math.floor` for the non-negative inputs used here.
+pub fn format_eta(seconds: f64) -> String {
+    if seconds < 60.0 {
+        format!("{}s", seconds.round() as i64)
+    } else if seconds < 3600.0 {
+        format!(
+            "{}m {}s",
+            (seconds / 60.0).floor() as i64,
+            (seconds % 60.0).round() as i64
+        )
+    } else {
+        format!(
+            "{}h {}m",
+            (seconds / 3600.0).floor() as i64,
+            ((seconds % 3600.0) / 60.0).floor() as i64
+        )
+    }
+}
+
+/// Group an integer with `,` thousands separators. Port of qmd `formatCount`
+/// (`src/cli/qmd.ts:3321`), which uses `n.toLocaleString("en-US")`.
+pub fn format_count(n: usize) -> String {
+    let digits = n.to_string();
+    let bytes = digits.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
+/// Shorten a model URI for display. Port of qmd `shortModelName`
+/// (`src/cli/qmd.ts:3325`): `hf:` URIs collapse to the last `/` segment;
+/// otherwise truncate to 56 chars (`53 + "..."`). Char-based truncation is
+/// boundary-safe and identical to qmd for the ASCII URIs in practice.
+pub fn short_model_name(model: &str) -> String {
+    if model.starts_with("hf:") {
+        let last = model.rsplit('/').next().unwrap_or("");
+        return if last.is_empty() {
+            model.to_string()
+        } else {
+            last.to_string()
+        };
+    }
+    if model.chars().count() > 56 {
+        let prefix: String = model.chars().take(53).collect();
+        format!("{prefix}...")
+    } else {
+        model.to_string()
+    }
+}
+
 /// Parse an RFC3339-ish timestamp (`YYYY-MM-DDTHH:MM:SS[.sss]Z` or with offset)
 /// to seconds-since-epoch. Returns `None` on parse failure.
 ///
@@ -115,4 +173,44 @@ fn civil_from_epoch(epoch: i64) -> (i64, u32, u32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d, hour, minute)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_eta_matches_qmd_buckets() {
+        assert_eq!(format_eta(0.0), "0s");
+        assert_eq!(format_eta(5.4), "5s");
+        assert_eq!(format_eta(59.0), "59s");
+        assert_eq!(format_eta(95.0), "1m 35s"); // 1m 35s
+        assert_eq!(format_eta(3599.0), "59m 59s");
+        assert_eq!(format_eta(3600.0), "1h 0m");
+        assert_eq!(format_eta(7384.0), "2h 3m");
+    }
+
+    #[test]
+    fn format_count_groups_thousands() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(42), "42");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1_000), "1,000");
+        assert_eq!(format_count(12_345), "12,345");
+        assert_eq!(format_count(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn short_model_name_collapses_hf_and_truncates() {
+        assert_eq!(short_model_name("hf:user/repo/model.gguf"), "model.gguf");
+        assert_eq!(short_model_name("hf:bare"), "hf:bare"); // no '/', pop = whole
+        assert_eq!(short_model_name("hf:ends/with/"), "hf:ends/with/"); // empty pop → full
+        assert_eq!(short_model_name("plain-model"), "plain-model");
+        let long = "x".repeat(57);
+        let short = short_model_name(&long);
+        assert_eq!(short.chars().count(), 56);
+        assert!(short.ends_with("..."));
+        let exactly_56 = "y".repeat(56);
+        assert_eq!(short_model_name(&exactly_56), exactly_56);
+    }
 }

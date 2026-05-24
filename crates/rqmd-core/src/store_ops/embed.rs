@@ -593,7 +593,7 @@ async fn run_inner(
                     );
                 }
                 tracing::warn!(
-                    "Error rate too high ({}/{}) — aborting sub-batch",
+                    "Error rate too high ({}/{}) — aborting embedding",
                     state.active_error_count(),
                     processed
                 );
