@@ -11,15 +11,6 @@ local LLM re-ranking — all on-device via
 [llama.cpp](https://github.com/ggerganov/llama.cpp) with GGUF models. Nothing
 leaves your machine.
 
-## Why a Rust port?
-
-The original qmd runs on Node/Bun, which on Windows effectively means running
-inside WSL2 — native SQLite FTS extensions and `node-llama-cpp` are painful to
-get working on bare Windows. rqmd compiles to a **single self-contained native
-binary** that runs the same way on Windows, macOS, and Linux, with no JS runtime
-and no WSL2. Along the way it also gains native tree-sitter grammars (no WASM)
-and an HTTP daemon that keeps models warm in VRAM across requests.
-
 ## Features
 
 - **Three search modes** — `search` (BM25 keyword), `vsearch` (vector + query
@@ -88,6 +79,10 @@ rqmd get notes/decisions.md --from 40 -l 20 # fetch a document slice
 
 `search` works immediately. `vsearch` and `query` need embeddings (`rqmd embed`)
 and will download the models on first run.
+
+This README covers the commands you'll reach for most. rqmd closely mirrors
+qmd's CLI (with a few [documented differences](#differences-from-qmd)), so for
+anything not covered here, see [qmd's README](https://github.com/tobi/qmd).
 
 ## Search modes
 
