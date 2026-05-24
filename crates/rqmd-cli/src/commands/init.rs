@@ -48,10 +48,10 @@ pub fn run(p: &Palette) -> Result<()> {
     };
     let db_path = rqmd_dir.join("index.sqlite");
 
-    // Seed (or refresh) the models section: env > existing YAML > crate default.
-    // For a fresh config the YAML models are empty, so this resolves env vars and
-    // defaults; for an existing one it preserves explicit values and fills gaps
-    // (qmd `resolveModels()` on create / `ensureModelsConfiguredForCli` on reuse).
+    // Always (re)write the models section, resolving each slot as
+    // existing YAML > env > crate default. A fresh config has no models, so this
+    // is env > default; re-running on an existing config keeps explicit values
+    // and only fills empty slots (qmd `resolveModels()`).
     let mut cfg = Config::from_file(&config_path)
         .with_context(|| format!("loading config at {}", config_path.display()))?;
     let existing = ModelResolutionConfig {
