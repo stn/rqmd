@@ -31,6 +31,12 @@ use super::{Error, Result};
 
 const SUB_BATCH: usize = 32;
 const SESSION_MAX_DURATION: Duration = Duration::from_secs(30 * 60);
+/// Drain the retry queue once after this many unrelated chunks succeed.
+/// Mirrors qmd `RETRY_AFTER_SUCCESSFUL_CHUNKS` (`store.ts:1612`).
+const RETRY_AFTER_SUCCESSFUL_CHUNKS: usize = 64;
+/// Per-chunk retry cap; prevents endless loops on permanently bad chunks.
+/// Mirrors qmd `MAX_RETRY_ATTEMPTS` (`store.ts:1613`).
+const MAX_RETRY_ATTEMPTS: u32 = 3;
 
 /// Caller-provided options for [`generate_embeddings`].
 ///
@@ -71,42 +77,266 @@ impl std::fmt::Debug for EmbedOptions {
     }
 }
 
-/// Snapshot delivered via [`EmbedOptions::on_progress`]. Counters are
-/// monotonically non-decreasing within a single call.
+/// Snapshot delivered via [`EmbedOptions::on_progress`]. `chunks_embedded`,
+/// `total_chunks` and `bytes_processed` are monotonically non-decreasing
+/// within a call; `errors` is the *active* failure count and may decrease
+/// when a retry recovers a previously-failed chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmbedProgress {
     pub chunks_embedded: usize,
     pub total_chunks: usize,
     pub bytes_processed: usize,
     pub total_bytes: usize,
+    /// Chunks still unresolved after retries (= `failures.len()`).
     pub errors: usize,
 }
 
+/// A chunk that did not embed successfully and is still unresolved after
+/// retries. Port of qmd `EmbedFailure` (`store.ts:1374`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbedFailure {
+    pub path: String,
+    pub hash: String,
+    pub seq: i64,
+    pub attempts: u32,
+    pub reason: String,
+}
+
 /// Summary returned by [`generate_embeddings`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbedResult {
     pub docs_processed: usize,
     pub chunks_embedded: usize,
+    /// Chunks still failed after retries (= active failure count).
     pub errors: usize,
+    /// Detail of each still-failed chunk (drives the CLI failure report).
+    pub failures: Vec<EmbedFailure>,
     pub duration_ms: u128,
 }
 
 #[derive(Debug, Clone)]
 struct ChunkItem {
     hash: String,
+    path: String,
     title: String,
     text: String,
     seq: i64,
     pos: i64,
     bytes: usize,
+    /// Total chunks for the owning document. Carried on the item (not looked
+    /// up per doc-batch) because retries can fire in a *later* doc-batch where
+    /// the per-batch `expected_chunks` map no longer holds this hash. Mirrors
+    /// qmd `chunk.expectedTotalChunks` (`store.ts:1434`).
+    expected_total_chunks: i64,
 }
 
 #[derive(Default)]
 struct Counters {
     chunks_embedded: usize,
-    errors: usize,
     total_chunks: usize,
     bytes_processed: usize,
+}
+
+/// Outcome of [`run_inner`]: success count plus the unresolved-failure view.
+struct RunOutcome {
+    chunks_embedded: usize,
+    errors: usize,
+    failures: Vec<EmbedFailure>,
+}
+
+fn chunk_key(chunk: &ChunkItem) -> String {
+    format!("{}:{}", chunk.hash, chunk.seq)
+}
+
+/// Stringify an error for a failure record, truncating to 180 chars
+/// (177 + "...") like qmd `reasonFromError` (`store.ts:1620`). Char-based,
+/// not byte- or UTF-16-based: boundary-safe (never panics on multibyte) and
+/// identical to qmd for ASCII messages (the common case). The char-vs-UTF-16
+/// boundary difference for non-ASCII text is a sanctioned micro-divergence.
+fn reason_from_error<E: std::fmt::Display>(e: &E) -> String {
+    let raw = e.to_string();
+    if raw.chars().count() > 180 {
+        let truncated: String = raw.chars().take(177).collect();
+        format!("{truncated}...")
+    } else {
+        raw
+    }
+}
+
+/// Per-chunk failure tracking + bounded retry queue, shared across all
+/// doc-batches of a single [`generate_embeddings`] run. Port of qmd's
+/// `failures`/`retryQueue` closures (`store.ts:1614-1682`).
+///
+/// `errors` reported to callers is `failures.len()` — the count of chunks
+/// still unresolved *after* retries, not a monotonic attempt counter. A chunk
+/// that fails then recovers leaves no error; a chunk that fails three times
+/// counts once.
+#[derive(Default)]
+struct ResilienceState {
+    /// key = "hash:seq"
+    failures: HashMap<String, EmbedFailure>,
+    /// key = "hash:seq"
+    retry_queue: HashMap<String, ChunkItem>,
+    successes_since_retry: usize,
+}
+
+impl ResilienceState {
+    fn active_error_count(&self) -> usize {
+        self.failures.len()
+    }
+
+    /// Snapshot of outstanding failures, sorted by `(path, seq)` for stable,
+    /// readable output. (qmd relies on JS `Map` insertion order; rqmd's
+    /// `HashMap` is unordered, so we sort to keep the CLI's "first 8" and any
+    /// tests deterministic.)
+    fn failure_list(&self) -> Vec<EmbedFailure> {
+        let mut out: Vec<EmbedFailure> = self.failures.values().cloned().collect();
+        out.sort_by(|a, b| a.path.cmp(&b.path).then(a.seq.cmp(&b.seq)));
+        out
+    }
+
+    fn record_failure(&mut self, chunk: &ChunkItem, reason: String) {
+        let key = chunk_key(chunk);
+        let attempts = self.failures.get(&key).map(|f| f.attempts).unwrap_or(0) + 1;
+        self.failures.insert(
+            key.clone(),
+            EmbedFailure {
+                path: chunk.path.clone(),
+                hash: chunk.hash.clone(),
+                seq: chunk.seq,
+                attempts,
+                reason,
+            },
+        );
+        self.retry_queue.insert(key, chunk.clone());
+    }
+
+    fn clear_failure(&mut self, chunk: &ChunkItem) {
+        let key = chunk_key(chunk);
+        self.failures.remove(&key);
+        self.retry_queue.remove(&key);
+    }
+
+    /// Embed one chunk individually. On success inserts the vector and clears
+    /// any prior failure; on failure records the reason (never propagates the
+    /// embed error). DB-insert errors *do* propagate (`?`) — a write failure
+    /// is systemic, not a transient per-chunk condition. Port of qmd
+    /// `tryEmbedChunk` (`store.ts:1642`).
+    #[allow(clippy::too_many_arguments)]
+    async fn try_embed_chunk(
+        &mut self,
+        store: &mut Store,
+        session: &Arc<LlmSession>,
+        chunk: &ChunkItem,
+        model: &str,
+        fingerprint: &str,
+        now: &str,
+        chunks_embedded: &mut usize,
+    ) -> Result<bool> {
+        let text = format_doc_for_embedding(&chunk.text, Some(&chunk.title), model);
+        let opts = LlmEmbedOptions {
+            model: Some(model.into()),
+            is_query: false,
+            title: None,
+        };
+        match session.embed(&text, opts).await {
+            Ok(Some(emb)) => {
+                store.with_connection_mut(|c| {
+                    insert_embedding(
+                        c,
+                        &chunk.hash,
+                        chunk.seq,
+                        chunk.pos,
+                        &emb.embedding,
+                        model,
+                        fingerprint,
+                        now,
+                        chunk.expected_total_chunks,
+                    )
+                })?;
+                *chunks_embedded += 1;
+                self.successes_since_retry += 1;
+                self.clear_failure(chunk);
+                Ok(true)
+            }
+            Ok(None) => {
+                self.record_failure(chunk, "embedding returned no vector".to_string());
+                Ok(false)
+            }
+            Err(e) => {
+                self.record_failure(chunk, reason_from_error(&e));
+                Ok(false)
+            }
+        }
+    }
+
+    /// Drain the retry queue. Normal mode (`force=false`): one pass, and only
+    /// once at least `RETRY_AFTER_SUCCESSFUL_CHUNKS` unrelated chunks have
+    /// succeeded. Force mode: keep retrying until every outstanding failure
+    /// recovers or hits `MAX_RETRY_ATTEMPTS`. Port of qmd `retryFailedChunks`
+    /// (`store.ts:1660`).
+    #[allow(clippy::too_many_arguments)]
+    async fn retry_failed_chunks(
+        &mut self,
+        store: &mut Store,
+        session: &Arc<LlmSession>,
+        model: &str,
+        fingerprint: &str,
+        now: &str,
+        chunks_embedded: &mut usize,
+        force: bool,
+    ) -> Result<()> {
+        if !session.is_valid() || self.retry_queue.is_empty() {
+            return Ok(());
+        }
+        if !force && self.successes_since_retry < RETRY_AFTER_SUCCESSFUL_CHUNKS {
+            return Ok(());
+        }
+        self.successes_since_retry = 0;
+
+        loop {
+            // Re-snapshot each pass: try_embed_chunk mutates retry_queue, and
+            // qmd re-spreads `[...retryQueue]` every iteration (store.ts:1668).
+            let snapshot: Vec<(String, ChunkItem)> = self
+                .retry_queue
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let mut retried = 0usize;
+            for (key, chunk) in snapshot {
+                let retryable = self
+                    .failures
+                    .get(&key)
+                    .is_some_and(|f| f.attempts < MAX_RETRY_ATTEMPTS);
+                if !retryable {
+                    continue;
+                }
+                retried += 1;
+                self.try_embed_chunk(
+                    store,
+                    session,
+                    &chunk,
+                    model,
+                    fingerprint,
+                    now,
+                    chunks_embedded,
+                )
+                .await?;
+            }
+            if !force || retried == 0 || !session.is_valid() {
+                break;
+            }
+            let any_retryable = self.retry_queue.keys().any(|key| {
+                self.failures
+                    .get(key)
+                    .is_some_and(|f| f.attempts < MAX_RETRY_ATTEMPTS)
+            });
+            if !any_retryable {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Generate vector embeddings for documents that need them.
@@ -187,6 +417,7 @@ pub async fn generate_embeddings(
             docs_processed: 0,
             chunks_embedded: 0,
             errors: 0,
+            failures: Vec::new(),
             duration_ms: start.elapsed().as_millis(),
         });
     }
@@ -227,6 +458,7 @@ pub async fn generate_embeddings(
         docs_processed: total_docs,
         chunks_embedded: outcome.chunks_embedded,
         errors: outcome.errors,
+        failures: outcome.failures,
         duration_ms: start.elapsed().as_millis(),
     })
 }
@@ -244,9 +476,11 @@ async fn run_inner(
     chunk_strategy: ChunkStrategy,
     on_progress: Option<&Arc<dyn Fn(EmbedProgress) + Send + Sync>>,
     docs: Vec<PendingEmbeddingDoc>,
-) -> Result<Counters> {
+) -> Result<RunOutcome> {
     let llm_arc: Arc<dyn Llm> = session.clone();
     let mut counters = Counters::default();
+    // Per-chunk failures + retry queue, shared across all doc-batches.
+    let mut state = ResilienceState::default();
     let mut vec_initialized = false;
 
     for batch_meta in build_embedding_batches(&docs, max_docs_per_batch, max_batch_bytes) {
@@ -277,16 +511,19 @@ async fn run_inner(
                 Some(session.signal()),
             )
             .await?;
-            expected_chunks.insert(doc.hash.clone(), chunks.len() as i64);
+            let n_chunks = chunks.len() as i64;
+            expected_chunks.insert(doc.hash.clone(), n_chunks);
             for (seq, chunk) in chunks.into_iter().enumerate() {
                 let bytes = chunk.text.len();
                 chunk_items.push(ChunkItem {
                     hash: doc.hash.clone(),
+                    path: doc.path.clone(),
                     title: title.clone(),
                     text: chunk.text,
                     seq: seq as i64,
                     pos: chunk.pos as i64,
                     bytes,
+                    expected_total_chunks: n_chunks,
                 });
             }
         }
@@ -294,7 +531,12 @@ async fn run_inner(
 
         if chunk_items.is_empty() {
             counters.bytes_processed += batch_bytes;
-            fire_progress(on_progress, &counters, total_bytes);
+            fire_progress(
+                on_progress,
+                &counters,
+                state.active_error_count(),
+                total_bytes,
+            );
             continue;
         }
 
@@ -326,18 +568,34 @@ async fn run_inner(
         let mut batch_start = 0usize;
         while batch_start < chunk_items.len() {
             if !session.is_valid() {
-                let remaining = chunk_items.len() - batch_start;
-                counters.errors += remaining;
-                tracing::warn!("Session expired — skipping {remaining} remaining chunks");
+                let remaining = &chunk_items[batch_start..];
+                tracing::warn!(
+                    "Session expired — skipping {} remaining chunks",
+                    remaining.len()
+                );
+                for chunk in remaining {
+                    state.record_failure(
+                        chunk,
+                        "LLM session expired before embedding chunk".to_string(),
+                    );
+                }
                 break;
             }
-            let processed = counters.chunks_embedded + counters.errors;
-            if processed >= SUB_BATCH && (counters.errors as f64) > (processed as f64) * 0.8 {
-                let remaining = chunk_items.len() - batch_start;
-                counters.errors += remaining;
+            let processed = counters.chunks_embedded + state.active_error_count();
+            if processed >= SUB_BATCH
+                && (state.active_error_count() as f64) > (processed as f64) * 0.8
+            {
+                // Record-then-warn order mirrors qmd (`store.ts:1756`): the
+                // logged count includes the just-aborted remaining chunks.
+                for chunk in &chunk_items[batch_start..] {
+                    state.record_failure(
+                        chunk,
+                        "embedding aborted because error rate was too high".to_string(),
+                    );
+                }
                 tracing::warn!(
                     "Error rate too high ({}/{}) — aborting sub-batch",
-                    counters.errors,
+                    state.active_error_count(),
                     processed
                 );
                 break;
@@ -354,7 +612,7 @@ async fn run_inner(
                 title: None,
             };
 
-            match session.embed_batch(&texts, opts.clone()).await {
+            match session.embed_batch(&texts, opts).await {
                 Ok(embeddings) => {
                     for (i, chunk) in sub.iter().enumerate() {
                         if let Some(Some(emb)) = embeddings.get(i) {
@@ -368,44 +626,70 @@ async fn run_inner(
                                     model,
                                     fingerprint,
                                     now,
-                                    *expected_chunks.get(&chunk.hash).unwrap_or(&1),
+                                    chunk.expected_total_chunks,
                                 )
                             })?;
                             counters.chunks_embedded += 1;
+                            state.successes_since_retry += 1;
+                            state.clear_failure(chunk);
                         } else {
-                            counters.errors += 1;
+                            state.record_failure(
+                                chunk,
+                                "batch embedding returned no vector".to_string(),
+                            );
                         }
                         batch_chunk_bytes_processed += chunk.bytes;
                     }
+                    state
+                        .retry_failed_chunks(
+                            store,
+                            &session,
+                            model,
+                            fingerprint,
+                            now,
+                            &mut counters.chunks_embedded,
+                            false,
+                        )
+                        .await?;
                 }
-                Err(_) => {
+                Err(e) => {
+                    // Batch failed — fall back to individual embeds. A recovered
+                    // chunk clears its prior failure, so the error count reflects
+                    // only outstanding failures.
                     if !session.is_valid() {
-                        counters.errors += sub.len();
+                        let reason = reason_from_error(&e);
+                        for chunk in sub {
+                            state.record_failure(
+                                chunk,
+                                format!("batch failed and session expired: {reason}"),
+                            );
+                        }
                         batch_chunk_bytes_processed += sub.iter().map(|c| c.bytes).sum::<usize>();
                     } else {
                         for chunk in sub {
-                            let text =
-                                format_doc_for_embedding(&chunk.text, Some(&chunk.title), model);
-                            match session.embed(&text, opts.clone()).await {
-                                Ok(Some(emb)) => {
-                                    store.with_connection_mut(|c| {
-                                        insert_embedding(
-                                            c,
-                                            &chunk.hash,
-                                            chunk.seq,
-                                            chunk.pos,
-                                            &emb.embedding,
-                                            model,
-                                            fingerprint,
-                                            now,
-                                            *expected_chunks.get(&chunk.hash).unwrap_or(&1),
-                                        )
-                                    })?;
-                                    counters.chunks_embedded += 1;
-                                }
-                                _ => counters.errors += 1,
-                            }
+                            state
+                                .try_embed_chunk(
+                                    store,
+                                    &session,
+                                    chunk,
+                                    model,
+                                    fingerprint,
+                                    now,
+                                    &mut counters.chunks_embedded,
+                                )
+                                .await?;
                             batch_chunk_bytes_processed += chunk.bytes;
+                            state
+                                .retry_failed_chunks(
+                                    store,
+                                    &session,
+                                    model,
+                                    fingerprint,
+                                    now,
+                                    &mut counters.chunks_embedded,
+                                    false,
+                                )
+                                .await?;
                         }
                     }
                 }
@@ -424,7 +708,7 @@ async fn run_inner(
                 total_chunks: counters.total_chunks,
                 bytes_processed: snapshot_bytes,
                 total_bytes,
-                errors: counters.errors,
+                errors: state.active_error_count(),
             };
             if let Some(cb) = on_progress {
                 cb(snapshot);
@@ -432,21 +716,45 @@ async fn run_inner(
             batch_start = batch_end;
         }
 
+        // Forced drain of the retry queue before cleanup, so chunks that recover
+        // here complete their document and survive remove_incomplete_embeddings.
+        state
+            .retry_failed_chunks(
+                store,
+                &session,
+                model,
+                fingerprint,
+                now,
+                &mut counters.chunks_embedded,
+                true,
+            )
+            .await?;
+
         let removed = store
             .with_connection_mut(|c| remove_incomplete_embeddings(c, &expected_chunks, model))?;
         if removed > 0 {
             counters.chunks_embedded = counters.chunks_embedded.saturating_sub(removed as usize);
         }
         counters.bytes_processed += batch_bytes;
-        fire_progress(on_progress, &counters, total_bytes);
+        fire_progress(
+            on_progress,
+            &counters,
+            state.active_error_count(),
+            total_bytes,
+        );
     }
 
-    Ok(counters)
+    Ok(RunOutcome {
+        chunks_embedded: counters.chunks_embedded,
+        errors: state.active_error_count(),
+        failures: state.failure_list(),
+    })
 }
 
 fn fire_progress(
     on_progress: Option<&Arc<dyn Fn(EmbedProgress) + Send + Sync>>,
     counters: &Counters,
+    errors: usize,
     total_bytes: usize,
 ) {
     if let Some(cb) = on_progress {
@@ -455,7 +763,7 @@ fn fire_progress(
             total_chunks: counters.total_chunks,
             bytes_processed: counters.bytes_processed,
             total_bytes,
-            errors: counters.errors,
+            errors,
         });
     }
 }
@@ -535,5 +843,104 @@ mod tests {
         // one doc per batch — single oversized doc gets its own batch.
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].len(), 1);
+    }
+
+    fn chunk(hash: &str, seq: i64) -> ChunkItem {
+        ChunkItem {
+            hash: hash.into(),
+            path: format!("docs/{hash}.md"),
+            title: "T".into(),
+            text: "body".into(),
+            seq,
+            pos: 0,
+            bytes: 4,
+            expected_total_chunks: 1,
+        }
+    }
+
+    #[test]
+    fn chunk_key_is_hash_colon_seq() {
+        assert_eq!(chunk_key(&chunk("abc", 2)), "abc:2");
+    }
+
+    #[test]
+    fn record_failure_tracks_attempts_and_queues_retry() {
+        let mut s = ResilienceState::default();
+        let c = chunk("h1", 0);
+
+        s.record_failure(&c, "boom".into());
+        assert_eq!(s.active_error_count(), 1);
+        assert!(s.retry_queue.contains_key("h1:0"));
+        let f = &s.failures["h1:0"];
+        assert_eq!(f.attempts, 1);
+        assert_eq!(f.path, "docs/h1.md");
+        assert_eq!(f.hash, "h1");
+        assert_eq!(f.seq, 0);
+        assert_eq!(f.reason, "boom");
+
+        // Re-recording the same chunk bumps attempts, keeps a single entry.
+        s.record_failure(&c, "boom again".into());
+        assert_eq!(s.active_error_count(), 1);
+        assert_eq!(s.failures["h1:0"].attempts, 2);
+        assert_eq!(s.failures["h1:0"].reason, "boom again");
+    }
+
+    #[test]
+    fn clear_failure_removes_from_both_maps() {
+        let mut s = ResilienceState::default();
+        let c = chunk("h1", 0);
+        s.record_failure(&c, "boom".into());
+        s.clear_failure(&c);
+        assert_eq!(s.active_error_count(), 0);
+        assert!(s.retry_queue.is_empty());
+        assert!(s.failure_list().is_empty());
+    }
+
+    #[test]
+    fn failure_list_is_sorted_by_path_then_seq() {
+        let mut s = ResilienceState::default();
+        s.record_failure(&chunk("b", 1), "x".into());
+        s.record_failure(&chunk("a", 5), "y".into());
+        s.record_failure(&chunk("a", 2), "z".into());
+        let list = s.failure_list();
+        let keys: Vec<(String, i64)> = list.iter().map(|f| (f.path.clone(), f.seq)).collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("docs/a.md".into(), 2),
+                ("docs/a.md".into(), 5),
+                ("docs/b.md".into(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn reason_from_error_passes_through_short_messages() {
+        let r = reason_from_error(&"short message");
+        assert_eq!(r, "short message");
+    }
+
+    #[test]
+    fn reason_from_error_truncates_long_messages_to_180() {
+        let long = "x".repeat(500);
+        let r = reason_from_error(&long);
+        assert_eq!(r.chars().count(), 180);
+        assert!(r.ends_with("..."));
+        assert_eq!(r, format!("{}...", "x".repeat(177)));
+    }
+
+    #[test]
+    fn reason_from_error_at_boundary_180_is_untouched() {
+        let exactly = "y".repeat(180);
+        assert_eq!(reason_from_error(&exactly), exactly);
+    }
+
+    #[test]
+    fn reason_from_error_is_char_boundary_safe_on_multibyte() {
+        // 200 multibyte chars: must not panic on a non-UTF-8-boundary slice.
+        let multibyte = "あ".repeat(200);
+        let r = reason_from_error(&multibyte);
+        assert_eq!(r.chars().count(), 180);
+        assert!(r.ends_with("..."));
     }
 }

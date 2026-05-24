@@ -37,7 +37,7 @@ pub use crate::store::embeddings::{EmbeddingDoc, HashForEmbedding, PendingEmbedd
 pub use crate::store::status::{IndexHealthInfo, IndexStatus};
 
 pub use chunk_tokens::{TokenChunk, chunk_document_by_tokens};
-pub use embed::{EmbedOptions, EmbedProgress, EmbedResult, generate_embeddings};
+pub use embed::{EmbedFailure, EmbedOptions, EmbedProgress, EmbedResult, generate_embeddings};
 pub use expand::{ExpandedQuery, ExpandedQueryType, expand_query};
 pub use hybrid::{HybridQueryOptions, HybridQueryResult, SearchHooks, hybrid_query};
 pub use rerank::{RerankCandidate, RerankScore, rerank};
