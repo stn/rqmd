@@ -396,12 +396,12 @@ pub async fn generate_embeddings(
     // front rather than silently looping forever on a zero budget.
     if max_docs_per_batch == 0 {
         return Err(Error::EmbedFailed(
-            "maxDocsPerBatch must be greater than 0".into(),
+            "maxDocsPerBatch must be a positive integer".into(),
         ));
     }
     if max_batch_bytes == 0 {
         return Err(Error::EmbedFailed(
-            "maxBatchBytes must be greater than 0".into(),
+            "maxBatchBytes must be a positive integer".into(),
         ));
     }
 

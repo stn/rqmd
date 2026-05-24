@@ -31,6 +31,18 @@ pub async fn run(args: EmbedArgs, state: &mut IndexState) -> Result<()> {
             args.collection.len()
         );
     }
+
+    // Validate batch limits up front (qmd `parseEmbedBatchOption`), before the
+    // "already embedded" precheck / model resolve — so invalid flags fail fast
+    // regardless of index state. The same check also runs in
+    // `generate_embeddings` (defense-in-depth for the MCP / RqmdStore path).
+    if args.max_docs_per_batch == Some(0) {
+        bail!("maxDocsPerBatch must be a positive integer");
+    }
+    if args.max_batch_mb == Some(0) {
+        bail!("maxBatchBytes must be a positive integer");
+    }
+
     let collection = args.collection.into_iter().next();
     let chunk_strategy = args.chunk_strategy.map(Into::into);
 
