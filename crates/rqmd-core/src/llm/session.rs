@@ -34,7 +34,6 @@ use tokio_util::sync::CancellationToken;
 use async_trait::async_trait;
 
 use crate::llm::error::{Error, Result};
-use crate::llm::llama_cpp::LlamaCpp;
 use crate::llm::traits::{LlamaToken, Llm};
 use crate::llm::types::{
     EmbedOptions, EmbeddingResult, ExpandQueryOptions, GenerateOptions, GenerateResult, ModelInfo,
@@ -56,9 +55,13 @@ pub struct LlmSessionOptions {
 /// was released cleanly (vs. timed out / externally aborted).
 pub const SESSION_RELEASED_REASON: &str = "session released";
 
-/// A scoped handle to an [`Arc<LlamaCpp>`]. See module docs.
+/// A scoped handle to an [`Arc<dyn Llm>`]. See module docs.
+///
+/// Holds a trait object rather than a concrete `LlamaCpp` so orchestrators
+/// (e.g. `generate_embeddings`) and tests can drive the session with any
+/// [`Llm`] impl, including fakes that inject embedding failures.
 pub struct LlmSession {
-    llm: Arc<LlamaCpp>,
+    llm: Arc<dyn Llm>,
     name: String,
     released: AtomicBool,
     abort: CancellationToken,
@@ -68,7 +71,7 @@ impl LlmSession {
     /// Construct a new session. Prefer [`with_llm_session`] for the
     /// scoped-RAII shape; this lower-level constructor is exposed for
     /// long-lived sessions managed externally.
-    pub fn new(llm: Arc<LlamaCpp>, options: LlmSessionOptions) -> Arc<Self> {
+    pub fn new(llm: Arc<dyn Llm>, options: LlmSessionOptions) -> Arc<Self> {
         let session = Arc::new(Self {
             llm,
             name: options.name.unwrap_or_else(|| "unnamed".into()),
@@ -207,6 +210,10 @@ impl Drop for LlmSession {
 /// `model_exists` delegates to the wrapped `LlamaCpp`.
 #[async_trait]
 impl Llm for LlmSession {
+    fn embed_context_size(&self) -> usize {
+        self.llm.embed_context_size()
+    }
+
     async fn embed(&self, text: &str, opts: EmbedOptions) -> Result<Option<EmbeddingResult>> {
         Self::embed(self, text, opts).await
     }
@@ -282,7 +289,7 @@ impl Llm for LlmSession {
 /// # }
 /// ```
 pub async fn with_llm_session<F, Fut, T>(
-    llm: Arc<LlamaCpp>,
+    llm: Arc<dyn Llm>,
     options: LlmSessionOptions,
     f: F,
 ) -> Result<T>

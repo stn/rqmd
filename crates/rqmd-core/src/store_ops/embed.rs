@@ -21,7 +21,6 @@ use crate::store::{
 
 use crate::llm::config::resolve_embed_model;
 use crate::llm::format::{embedding_fingerprint, format_doc_for_embedding};
-use crate::llm::llama_cpp::LlamaCpp;
 use crate::llm::session::{LlmSession, LlmSessionOptions};
 use crate::llm::traits::Llm;
 use crate::llm::types::EmbedOptions as LlmEmbedOptions;
@@ -355,7 +354,7 @@ impl ResilienceState {
 /// dimension mismatch.
 pub async fn generate_embeddings(
     store: &mut Store,
-    llm: Arc<LlamaCpp>,
+    llm: Arc<dyn Llm>,
     options: EmbedOptions,
 ) -> Result<EmbedResult> {
     let start = Instant::now();
