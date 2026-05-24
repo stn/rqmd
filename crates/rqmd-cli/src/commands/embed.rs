@@ -43,11 +43,18 @@ pub async fn run(args: EmbedArgs, state: &mut IndexState, p: &Palette) -> Result
     let on_progress: Arc<dyn Fn(EmbedProgress) + Send + Sync> = {
         let last_ms = last_ms.clone();
         Arc::new(move |ep: EmbedProgress| {
-            // "Done" must include errors because failed chunks only
-            // increment `errors`, never `chunks_embedded`
-            // (see rqmd-core/src/store_ops/embed.rs lines 293/300/345/367).
-            // Without this, partial-failure runs would drop the final
-            // progress frame inside the 100 ms throttle window.
+            // `done` is a best-effort throttle bypass: failed chunks settle as
+            // `errors`, not `chunks_embedded`, so we count both toward
+            // completion. `errors` is the active failure count (still
+            // unresolved after retries), so it can *decrease* between frames
+            // when a retry recovers a chunk — `settled` is not strictly
+            // monotonic and the bar can tick backwards. It can also *undershoot*
+            // `total_chunks`: when `remove_incomplete_embeddings` drops a
+            // partially-embedded doc's chunks, `chunks_embedded` falls while a
+            // failed sibling stays in `errors`, so `done` may never trip. That's
+            // fine — the final frame is guaranteed by the unconditional
+            // end-of-batch `fire_progress` in core, and the summary below is the
+            // source of truth.
             let done = ep.total_chunks > 0
                 && ep.chunks_embedded.saturating_add(ep.errors) >= ep.total_chunks;
             let now_ms = start.elapsed().as_millis() as u64;
@@ -119,11 +126,30 @@ pub async fn run(args: EmbedArgs, state: &mut IndexState, p: &Palette) -> Result
     );
     if result.errors > 0 {
         eprintln!(
-            "{}\u{26A0}{} {} chunks failed",
+            "{}\u{26A0}{} {} chunks still failed after retries",
             p.yellow(),
             p.reset(),
             result.errors,
         );
+        for f in result.failures.iter().take(8) {
+            eprintln!(
+                "  {}{}#{} ({} attempts): {}{}",
+                p.dim(),
+                f.path,
+                f.seq,
+                f.attempts,
+                f.reason,
+                p.reset(),
+            );
+        }
+        if result.failures.len() > 8 {
+            eprintln!(
+                "  {}...and {} more{}",
+                p.dim(),
+                result.failures.len() - 8,
+                p.reset(),
+            );
+        }
     }
     Ok(())
 }

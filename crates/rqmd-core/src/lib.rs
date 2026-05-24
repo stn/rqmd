@@ -112,12 +112,12 @@ pub use llm::types::{
 // `llm::types::EmbedOptions` already exported above. Likewise `Error` /
 // `Result`.
 pub use store_ops::{
-    EmbedOptions as StoreOpsEmbedOptions, EmbedProgress, EmbedResult, Error as StoreOpsError,
-    ExpandedQuery, ExpandedQueryType, HashForEmbedding, HybridQueryOptions, HybridQueryResult,
-    IndexHealthInfo, IndexStatus, RerankCandidate, RerankScore, Result as StoreOpsResult,
-    SearchHooks, StructuredSearchOptions, TokenChunk, VectorSearchOptions, VectorSearchResult,
-    chunk_document_by_tokens, expand_query, generate_embeddings, hybrid_query, rerank, search_vec,
-    structured_search, vector_search_query,
+    EmbedFailure, EmbedOptions as StoreOpsEmbedOptions, EmbedProgress, EmbedResult,
+    Error as StoreOpsError, ExpandedQuery, ExpandedQueryType, HashForEmbedding, HybridQueryOptions,
+    HybridQueryResult, IndexHealthInfo, IndexStatus, RerankCandidate, RerankScore,
+    Result as StoreOpsResult, SearchHooks, StructuredSearchOptions, TokenChunk,
+    VectorSearchOptions, VectorSearchResult, chunk_document_by_tokens, expand_query,
+    generate_embeddings, hybrid_query, rerank, search_vec, structured_search, vector_search_query,
 };
 
 // `RqmdStore`: combines [`Store`], [`LlamaCpp`], and [`Config`] into the
