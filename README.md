@@ -84,29 +84,29 @@ This README covers the commands you'll reach for most. rqmd closely mirrors
 qmd's CLI (with a few [documented differences](#differences-from-qmd)), so for
 anything not covered here, see [qmd's README](https://github.com/tobi/qmd).
 
-## Excluding files (`.qmdignore`)
+## Excluding files
 
 By default rqmd indexes every file matching a collection's pattern (`**/*.md`).
-To skip files or folders, drop a `.qmdignore` file into any indexed directory.
-It uses **gitignore syntax** and supports both file and folder patterns:
+Like qmd, rqmd reads **no** ignore files — `.gitignore` and `.ignore` are never
+consulted, so your VCS and editor config can't change what gets searched.
 
-```gitignore
-old/                # skip a whole folder
-*.excalidraw.md     # skip files by pattern
-drafts/secret.md    # skip one specific file
+To skip files or folders, add gitignore-syntax patterns to a collection's
+`ignore` list in the index config:
+
+```yaml
+collections:
+  notes:
+    path: /home/me/notes
+    pattern: "**/*.md"
+    ignore:
+      - "old/"             # skip a whole folder
+      - "*.excalidraw.md"  # skip files by pattern
+      - "drafts/secret.md" # skip one specific file
 ```
 
-A global `~/.qmdignore` applies to every collection; a per-directory
-`.qmdignore` takes precedence over it and can re-include entries with
-`!pattern`. A collection's own `ignore` settings still apply on top.
-
-rqmd does **not** read `.gitignore` or `.ignore` — only `.qmdignore` (and the
-collection `ignore` list) affects indexing, so your VCS and editor config never
-change what gets searched. This is an rqmd-specific feature; qmd has no
-ignore-file support.
-
-Names starting with `.` are always skipped (e.g. `.git`, `.obsidian`). On
-Windows the hidden *attribute* alone does not exclude a file — only a leading
+Built-in excludes (`node_modules`, `.git`, `.cache`, `vendor`, `dist`, `build`)
+and any path component starting with `.` (e.g. `.obsidian`) are always skipped.
+On Windows the hidden *attribute* alone does not exclude a file — only a leading
 dot does.
 
 ## Search modes
@@ -174,9 +174,6 @@ The port aims to be faithful, not byte-identical. Notable divergences:
   executed, so run any pre-update commands (e.g. `git pull`) yourself.
 - Model env vars keep the `QMD_` prefix for compatibility; rqmd-specific vars
   (config/index/cache) use the `RQMD_` prefix.
-- Indexing honours a dedicated [`.qmdignore`](#excluding-files-qmdignore)
-  (gitignore syntax, plus a global `~/.qmdignore`) and never reads
-  `.gitignore`/`.ignore`; qmd has no ignore-file support.
 
 ## Credits & License
 
