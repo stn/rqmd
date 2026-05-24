@@ -670,8 +670,14 @@ impl RqmdStore {
         }
 
         let embed_model = self.resolved_models().embed;
+        let fingerprint = crate::llm::embedding_fingerprint(&embed_model);
         result.needs_embedding = self.inner.with_connection(|c| {
-            crate::store::embeddings::get_hashes_needing_embedding(c, None, &embed_model)
+            crate::store::embeddings::get_hashes_needing_embedding(
+                c,
+                None,
+                &embed_model,
+                &fingerprint,
+            )
         })?;
         Ok(result)
     }
@@ -689,13 +695,15 @@ impl RqmdStore {
     /// Index status: total documents, embeddings needed, etc.
     pub fn status(&self) -> Result<IndexStatus> {
         let model = self.resolved_models().embed;
-        Ok(self.inner.get_status(&model)?)
+        let fingerprint = crate::llm::embedding_fingerprint(&model);
+        Ok(self.inner.get_status(&model, &fingerprint)?)
     }
 
     /// Index health summary (stale-embedding age, etc.).
     pub fn index_health(&self) -> Result<IndexHealthInfo> {
         let model = self.resolved_models().embed;
-        Ok(self.inner.get_index_health(&model)?)
+        let fingerprint = crate::llm::embedding_fingerprint(&model);
+        Ok(self.inner.get_index_health(&model, &fingerprint)?)
     }
 }
 

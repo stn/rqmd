@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS content_vectors (
     seq INTEGER NOT NULL DEFAULT 0,
     pos INTEGER NOT NULL DEFAULT 0,
     model TEXT NOT NULL,
+    embed_fingerprint TEXT NOT NULL DEFAULT '',
     total_chunks INTEGER NOT NULL DEFAULT 1,
     embedded_at TEXT NOT NULL,
     PRIMARY KEY (hash, seq)
@@ -227,16 +228,29 @@ BEGIN
 END;
 "#;
 
-/// `content_vectors.seq` was added later in qmd; if an existing DB lacks the
-/// column, drop and recreate both `content_vectors` and `vectors_vec`.
-/// Mirrors the `cvInfo`/`hasSeqColumn` check at `store.ts:865–869`.
+/// Bring an existing `content_vectors` table up to the current schema.
+///
+/// Two eager migrations, in order:
+/// 1. `seq` was added early in qmd; a DB predating it cannot be mapped onto the
+///    new `(hash, seq)` PK, so drop and recreate both `content_vectors` and
+///    `vectors_vec` (vectors are lost — unavoidable). Mirrors the
+///    `cvInfo`/`hasSeqColumn` check at `store.ts:865–869`.
+/// 2. `embed_fingerprint` was added later; `ALTER TABLE ADD COLUMN` preserves
+///    every existing row (backfilled with `''` = legacy), so those vectors are
+///    treated as pending and re-embedded on the next `embed` rather than
+///    discarded. qmd does this lazily (`withLazyContentVectorMigration`); rqmd
+///    does it eagerly here, consistent with the `seq` migration above.
 fn upgrade_content_vectors_if_needed(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare("PRAGMA table_info(content_vectors)")?;
-    let cols: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
+    let read_columns = |conn: &Connection| -> Result<Vec<String>> {
+        let mut stmt = conn.prepare("PRAGMA table_info(content_vectors)")?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(cols)
+    };
+
+    let cols = read_columns(conn)?;
 
     if !cols.is_empty() && !cols.iter().any(|c| c == "seq") {
         conn.execute("DROP TABLE IF EXISTS content_vectors", [])?;
@@ -247,10 +261,23 @@ fn upgrade_content_vectors_if_needed(conn: &Connection) -> Result<()> {
                 seq INTEGER NOT NULL DEFAULT 0,
                 pos INTEGER NOT NULL DEFAULT 0,
                 model TEXT NOT NULL,
+                embed_fingerprint TEXT NOT NULL DEFAULT '',
                 total_chunks INTEGER NOT NULL DEFAULT 1,
                 embedded_at TEXT NOT NULL,
                 PRIMARY KEY (hash, seq)
             )"#,
+            [],
+        )?;
+    }
+
+    // Re-read: the branch above may have just recreated the table *with* the
+    // column, and `SCHEMA_DDL` (run first in `initialize`) creates a brand-new
+    // table with the column too. Reusing the stale `cols` here would mis-fire
+    // the ALTER and hit "duplicate column name".
+    let cols = read_columns(conn)?;
+    if cols.iter().any(|c| c == "seq") && !cols.iter().any(|c| c == "embed_fingerprint") {
+        conn.execute(
+            "ALTER TABLE content_vectors ADD COLUMN embed_fingerprint TEXT NOT NULL DEFAULT ''",
             [],
         )?;
     }
@@ -402,5 +429,66 @@ mod tests {
         // would keep (they have the `Other_Alphabetic` property). U+093E is a
         // Devanagari vowel sign (general category Mc) — TS strips it.
         assert_eq!(sanitize_fts5_term("a\u{093E}"), "a");
+    }
+
+    fn content_vector_columns(conn: &Connection) -> Vec<String> {
+        conn.prepare("PRAGMA table_info(content_vectors)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    #[test]
+    fn migration_adds_embed_fingerprint_preserving_existing_rows() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Pre-fingerprint schema: has `seq` but lacks `embed_fingerprint`.
+        conn.execute_batch(
+            "CREATE TABLE content_vectors (
+                hash TEXT NOT NULL,
+                seq INTEGER NOT NULL DEFAULT 0,
+                pos INTEGER NOT NULL DEFAULT 0,
+                model TEXT NOT NULL,
+                total_chunks INTEGER NOT NULL DEFAULT 1,
+                embedded_at TEXT NOT NULL,
+                PRIMARY KEY (hash, seq)
+            );
+            INSERT INTO content_vectors (hash, seq, pos, model, total_chunks, embedded_at)
+            VALUES ('h1', 0, 0, 'm', 1, 'ts');",
+        )
+        .unwrap();
+        assert!(
+            !content_vector_columns(&conn)
+                .iter()
+                .any(|c| c == "embed_fingerprint")
+        );
+
+        upgrade_content_vectors_if_needed(&conn).unwrap();
+
+        // Column added (eager ALTER), not a DROP+recreate.
+        assert!(
+            content_vector_columns(&conn)
+                .iter()
+                .any(|c| c == "embed_fingerprint")
+        );
+        // Existing row preserved and backfilled with the legacy empty value.
+        let (count, fp): (i64, String) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(embed_fingerprint) FROM content_vectors WHERE hash = 'h1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(fp, "");
+
+        // Idempotent: re-running must not raise "duplicate column name".
+        upgrade_content_vectors_if_needed(&conn).unwrap();
+        assert!(
+            content_vector_columns(&conn)
+                .iter()
+                .any(|c| c == "embed_fingerprint")
+        );
     }
 }

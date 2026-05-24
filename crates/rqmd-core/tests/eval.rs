@@ -495,6 +495,7 @@ async fn eval_vector_and_hybrid_search() {
                         chunk.pos as i64,
                         &emb.embedding,
                         &model_uri,
+                        &rqmd_core::llm::embedding_fingerprint(&model_uri),
                         &now,
                         total,
                     )

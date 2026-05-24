@@ -154,7 +154,11 @@ pub fn ensure_vec_table(conn: &Connection, dimensions: usize) -> Result<()> {
 /// (active documents whose embedding row is missing or partial). Each row
 /// carries a representative body and a sample path. Mirrors TS
 /// `getHashesForEmbedding` (3355).
-pub fn get_hashes_for_embedding(conn: &Connection, model: &str) -> Result<Vec<HashForEmbedding>> {
+pub fn get_hashes_for_embedding(
+    conn: &Connection,
+    model: &str,
+    fingerprint: &str,
+) -> Result<Vec<HashForEmbedding>> {
     let expected_expr = content_vector_expected_chunks_expr(conn)?;
     let sql = format!(
         "SELECT d.hash, c.doc AS body, MIN(d.path) AS path
@@ -163,8 +167,8 @@ pub fn get_hashes_for_embedding(conn: &Connection, model: &str) -> Result<Vec<Ha
          LEFT JOIN (
              SELECT hash, model, COUNT(*) AS chunk_count, {expected_expr} AS expected_chunks
              FROM content_vectors
-             WHERE model = ?
-             GROUP BY hash, model
+             WHERE model = ? AND embed_fingerprint = ?
+             GROUP BY hash, model, embed_fingerprint
          ) v ON d.hash = v.hash
          WHERE d.active = 1
            AND (v.hash IS NULL OR v.chunk_count < v.expected_chunks)
@@ -172,7 +176,7 @@ pub fn get_hashes_for_embedding(conn: &Connection, model: &str) -> Result<Vec<Ha
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params![model], |row| {
+        .query_map(params![model, fingerprint], |row| {
             Ok(HashForEmbedding {
                 hash: row.get(0)?,
                 body: row.get(1)?,
@@ -189,6 +193,7 @@ pub fn get_hashes_needing_embedding(
     conn: &Connection,
     collection: Option<&str>,
     model: &str,
+    fingerprint: &str,
 ) -> Result<i64> {
     let expected_expr = content_vector_expected_chunks_expr(conn)?;
     let collection_filter = if collection.is_some() {
@@ -202,8 +207,8 @@ pub fn get_hashes_needing_embedding(
          LEFT JOIN (
              SELECT hash, model, COUNT(*) AS chunk_count, {expected_expr} AS expected_chunks
              FROM content_vectors
-             WHERE model = ?
-             GROUP BY hash, model
+             WHERE model = ? AND embed_fingerprint = ?
+             GROUP BY hash, model, embed_fingerprint
          ) v ON d.hash = v.hash
          WHERE d.active = 1
            AND (v.hash IS NULL OR v.chunk_count < v.expected_chunks)
@@ -211,9 +216,9 @@ pub fn get_hashes_needing_embedding(
     );
     let mut stmt = conn.prepare(&sql)?;
     let count: i64 = if let Some(c) = collection {
-        stmt.query_row(params![model, c], |r| r.get(0))?
+        stmt.query_row(params![model, fingerprint, c], |r| r.get(0))?
     } else {
-        stmt.query_row(params![model], |r| r.get(0))?
+        stmt.query_row(params![model, fingerprint], |r| r.get(0))?
     };
     Ok(count)
 }
@@ -224,6 +229,7 @@ pub fn get_pending_embedding_docs(
     conn: &Connection,
     collection: Option<&str>,
     model: &str,
+    fingerprint: &str,
 ) -> Result<Vec<PendingEmbeddingDoc>> {
     let expected_expr = content_vector_expected_chunks_expr(conn)?;
     let collection_filter = if collection.is_some() {
@@ -238,8 +244,8 @@ pub fn get_pending_embedding_docs(
          LEFT JOIN (
              SELECT hash, model, COUNT(*) AS chunk_count, {expected_expr} AS expected_chunks
              FROM content_vectors
-             WHERE model = ?
-             GROUP BY hash, model
+             WHERE model = ? AND embed_fingerprint = ?
+             GROUP BY hash, model, embed_fingerprint
          ) v ON d.hash = v.hash
          WHERE d.active = 1
            AND (v.hash IS NULL OR v.chunk_count < v.expected_chunks)
@@ -249,7 +255,7 @@ pub fn get_pending_embedding_docs(
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = if let Some(c) = collection {
-        stmt.query_map(params![model, c], |row| {
+        stmt.query_map(params![model, fingerprint, c], |row| {
             Ok(PendingEmbeddingDoc {
                 hash: row.get(0)?,
                 path: row.get(1)?,
@@ -258,7 +264,7 @@ pub fn get_pending_embedding_docs(
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?
     } else {
-        stmt.query_map(params![model], |row| {
+        stmt.query_map(params![model, fingerprint], |row| {
             Ok(PendingEmbeddingDoc {
                 hash: row.get(0)?,
                 path: row.get(1)?,
@@ -324,6 +330,7 @@ pub fn insert_embedding(
     pos: i64,
     embedding: &[f32],
     model: &str,
+    fingerprint: &str,
     embedded_at: &str,
     total_chunks: i64,
 ) -> Result<()> {
@@ -331,9 +338,17 @@ pub fn insert_embedding(
 
     conn.execute(
         "INSERT OR REPLACE INTO content_vectors \
-         (hash, seq, pos, model, total_chunks, embedded_at) \
-         VALUES (?, ?, ?, ?, ?, ?)",
-        params![hash, seq, pos, model, total_chunks, embedded_at],
+         (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params![
+            hash,
+            seq,
+            pos,
+            model,
+            fingerprint,
+            total_chunks,
+            embedded_at
+        ],
     )?;
 
     conn.execute(
@@ -674,6 +689,7 @@ mod tests {
             0,
             &[1.0, 0.0, 0.0, 0.0],
             "m",
+            "fp",
             "2024-01-01T00:00:00.000Z",
             1,
         )
@@ -693,6 +709,7 @@ mod tests {
             10,
             &[0.0, 1.0, 0.0, 0.0],
             "m",
+            "fp",
             "2024-02-01T00:00:00.000Z",
             1,
         )
@@ -718,16 +735,16 @@ mod tests {
         ensure_vec_table(&store.conn, 4).unwrap();
 
         // hash-b expects 2 chunks but only 1 is embedded.
-        insert_embedding(&store.conn, "hash-b", 0, 0, &[1.0; 4], "m", "ts", 2).unwrap();
+        insert_embedding(&store.conn, "hash-b", 0, 0, &[1.0; 4], "m", "fp", "ts", 2).unwrap();
         // hash-c is complete: 1 expected, 1 embedded.
-        insert_embedding(&store.conn, "hash-c", 0, 0, &[1.0; 4], "m", "ts", 1).unwrap();
+        insert_embedding(&store.conn, "hash-c", 0, 0, &[1.0; 4], "m", "fp", "ts", 1).unwrap();
 
-        let count = get_hashes_needing_embedding(&store.conn, None, "m").unwrap();
+        let count = get_hashes_needing_embedding(&store.conn, None, "m", "fp").unwrap();
         assert_eq!(count, 2);
-        let count_scoped = get_hashes_needing_embedding(&store.conn, Some("c"), "m").unwrap();
+        let count_scoped = get_hashes_needing_embedding(&store.conn, Some("c"), "m", "fp").unwrap();
         assert_eq!(count_scoped, 2);
 
-        let hashes = get_hashes_for_embedding(&store.conn, "m").unwrap();
+        let hashes = get_hashes_for_embedding(&store.conn, "m", "fp").unwrap();
         let mut got: Vec<&str> = hashes.iter().map(|h| h.hash.as_str()).collect();
         got.sort();
         assert_eq!(got, vec!["hash-a", "hash-b"]);
@@ -738,12 +755,48 @@ mod tests {
         let (_t, store) = open_test_store();
         insert_doc(&store.conn, "c", "z.md", "ZZZ", "hz");
         insert_doc(&store.conn, "c", "a.md", "AAA", "ha");
-        let docs = get_pending_embedding_docs(&store.conn, None, "m").unwrap();
+        let docs = get_pending_embedding_docs(&store.conn, None, "m", "fp").unwrap();
         assert_eq!(
             docs.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(),
             vec!["a.md", "z.md"]
         );
         assert!(docs[0].bytes > 0);
+    }
+
+    #[test]
+    fn pending_detection_flips_when_fingerprint_changes() {
+        let (_t, store) = open_test_store();
+        insert_doc(&store.conn, "c", "a.md", "body", "h1");
+        ensure_vec_table(&store.conn, 4).unwrap();
+        insert_embedding(&store.conn, "h1", 0, 0, &[1.0; 4], "m", "fpA", "ts", 1).unwrap();
+
+        // Same (model, fingerprint) → fully embedded, not pending.
+        assert_eq!(
+            get_hashes_needing_embedding(&store.conn, None, "m", "fpA").unwrap(),
+            0
+        );
+        assert!(
+            get_pending_embedding_docs(&store.conn, None, "m", "fpA")
+                .unwrap()
+                .is_empty()
+        );
+
+        // Different fingerprint (e.g. chunk params changed) → stale → pending.
+        assert_eq!(
+            get_hashes_needing_embedding(&store.conn, None, "m", "fpB").unwrap(),
+            1
+        );
+        let pending = get_pending_embedding_docs(&store.conn, None, "m", "fpB").unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].hash, "h1");
+
+        // Legacy empty-fingerprint vectors are pending under any real
+        // fingerprint (re-inserting at the same (hash, seq) overwrites in place).
+        insert_embedding(&store.conn, "h1", 0, 0, &[1.0; 4], "m", "", "ts", 1).unwrap();
+        assert_eq!(
+            get_hashes_needing_embedding(&store.conn, None, "m", "fpA").unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -774,7 +827,7 @@ mod tests {
         let (_t, store) = open_test_store();
         insert_doc(&store.conn, "c", "a.md", "body", "h1");
         ensure_vec_table(&store.conn, 4).unwrap();
-        insert_embedding(&store.conn, "h1", 0, 0, &[1.0; 4], "m", "ts", 1).unwrap();
+        insert_embedding(&store.conn, "h1", 0, 0, &[1.0; 4], "m", "fp", "ts", 1).unwrap();
 
         clear_all_embeddings(&store.conn, None).unwrap();
         let cv_count: i64 = store
@@ -801,8 +854,8 @@ mod tests {
         // Hash exclusive to c1.
         insert_doc(&store.conn, "c1", "b.md", "body-b", "only_c1");
         ensure_vec_table(&store.conn, 4).unwrap();
-        insert_embedding(&store.conn, "shared", 0, 0, &[1.0; 4], "m", "ts", 1).unwrap();
-        insert_embedding(&store.conn, "only_c1", 0, 0, &[1.0; 4], "m", "ts", 1).unwrap();
+        insert_embedding(&store.conn, "shared", 0, 0, &[1.0; 4], "m", "fp", "ts", 1).unwrap();
+        insert_embedding(&store.conn, "only_c1", 0, 0, &[1.0; 4], "m", "fp", "ts", 1).unwrap();
 
         clear_all_embeddings(&store.conn, Some("c1")).unwrap();
 
@@ -824,7 +877,7 @@ mod tests {
         let (_t, store) = open_test_store();
         insert_doc(&store.conn, "c1", "a.md", "body", "only_c1");
         ensure_vec_table(&store.conn, 4).unwrap();
-        insert_embedding(&store.conn, "only_c1", 0, 0, &[1.0; 4], "m", "ts", 1).unwrap();
+        insert_embedding(&store.conn, "only_c1", 0, 0, &[1.0; 4], "m", "fp", "ts", 1).unwrap();
 
         clear_all_embeddings(&store.conn, Some("c1")).unwrap();
         assert!(!vec_table_exists(&store.conn).unwrap());
@@ -836,8 +889,19 @@ mod tests {
         insert_doc(&store.conn, "c", "a.md", "body", "h_partial");
         insert_doc(&store.conn, "c", "b.md", "body-b", "h_full");
         ensure_vec_table(&store.conn, 4).unwrap();
-        insert_embedding(&store.conn, "h_partial", 0, 0, &[1.0; 4], "m", "ts", 2).unwrap();
-        insert_embedding(&store.conn, "h_full", 0, 0, &[1.0; 4], "m", "ts", 1).unwrap();
+        insert_embedding(
+            &store.conn,
+            "h_partial",
+            0,
+            0,
+            &[1.0; 4],
+            "m",
+            "fp",
+            "ts",
+            2,
+        )
+        .unwrap();
+        insert_embedding(&store.conn, "h_full", 0, 0, &[1.0; 4], "m", "fp", "ts", 1).unwrap();
 
         let mut expected = HashMap::new();
         expected.insert("h_partial".to_string(), 2);
@@ -871,7 +935,18 @@ mod tests {
         ensure_vec_table(&store.conn, 4).unwrap();
 
         // Two chunks for doc a — one very close to the query, one farther.
-        insert_embedding(&store.conn, "ha", 0, 0, &[1.0, 0.0, 0.0, 0.0], "m", "ts", 2).unwrap();
+        insert_embedding(
+            &store.conn,
+            "ha",
+            0,
+            0,
+            &[1.0, 0.0, 0.0, 0.0],
+            "m",
+            "fp",
+            "ts",
+            2,
+        )
+        .unwrap();
         insert_embedding(
             &store.conn,
             "ha",
@@ -879,12 +954,24 @@ mod tests {
             10,
             &[0.0, 1.0, 0.0, 0.0],
             "m",
+            "fp",
             "ts",
             2,
         )
         .unwrap();
         // Doc b — moderate distance.
-        insert_embedding(&store.conn, "hb", 0, 0, &[0.5, 0.5, 0.0, 0.0], "m", "ts", 1).unwrap();
+        insert_embedding(
+            &store.conn,
+            "hb",
+            0,
+            0,
+            &[0.5, 0.5, 0.0, 0.0],
+            "m",
+            "fp",
+            "ts",
+            1,
+        )
+        .unwrap();
 
         let results =
             search_vec_with_embedding(&store.conn, &[1.0, 0.0, 0.0, 0.0], 5, None).unwrap();
@@ -902,8 +989,30 @@ mod tests {
         insert_doc(&store.conn, "c1", "a.md", "body-a", "ha");
         insert_doc(&store.conn, "c2", "b.md", "body-b", "hb");
         ensure_vec_table(&store.conn, 4).unwrap();
-        insert_embedding(&store.conn, "ha", 0, 0, &[1.0, 0.0, 0.0, 0.0], "m", "ts", 1).unwrap();
-        insert_embedding(&store.conn, "hb", 0, 0, &[1.0, 0.0, 0.0, 0.0], "m", "ts", 1).unwrap();
+        insert_embedding(
+            &store.conn,
+            "ha",
+            0,
+            0,
+            &[1.0, 0.0, 0.0, 0.0],
+            "m",
+            "fp",
+            "ts",
+            1,
+        )
+        .unwrap();
+        insert_embedding(
+            &store.conn,
+            "hb",
+            0,
+            0,
+            &[1.0, 0.0, 0.0, 0.0],
+            "m",
+            "fp",
+            "ts",
+            1,
+        )
+        .unwrap();
 
         let r1 =
             search_vec_with_embedding(&store.conn, &[1.0, 0.0, 0.0, 0.0], 5, Some("c1")).unwrap();

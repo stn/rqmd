@@ -27,3 +27,4 @@ pub mod worker;
 
 // Module-level convenience re-exports (mirrors the old `llm.ts` exports).
 pub use error::{Error, Result};
+pub use format::embedding_fingerprint;

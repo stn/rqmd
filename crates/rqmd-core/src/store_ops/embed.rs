@@ -20,7 +20,7 @@ use crate::store::{
 };
 
 use crate::llm::config::resolve_embed_model;
-use crate::llm::format::format_doc_for_embedding;
+use crate::llm::format::{embedding_fingerprint, format_doc_for_embedding};
 use crate::llm::llama_cpp::LlamaCpp;
 use crate::llm::session::{LlmSession, LlmSessionOptions};
 use crate::llm::traits::Llm;
@@ -151,6 +151,9 @@ pub async fn generate_embeddings(
         .model
         .clone()
         .unwrap_or_else(|| resolve_embed_model(None));
+    // Pure over (model, templates, chunk constants) — constant for the whole
+    // run, so compute once and thread it down rather than per chunk.
+    let fingerprint = embedding_fingerprint(&model);
     let collection_owned = options.collection.clone();
     let collection = collection_owned.as_deref();
     let max_docs_per_batch = options
@@ -177,7 +180,8 @@ pub async fn generate_embeddings(
         store.with_connection_mut(|c| clear_all_embeddings(c, collection))?;
     }
 
-    let docs = store.with_connection(|c| get_pending_embedding_docs(c, collection, &model))?;
+    let docs = store
+        .with_connection(|c| get_pending_embedding_docs(c, collection, &model, &fingerprint))?;
     if docs.is_empty() {
         return Ok(EmbedResult {
             docs_processed: 0,
@@ -206,6 +210,7 @@ pub async fn generate_embeddings(
         store,
         session.clone(),
         &model,
+        &fingerprint,
         &now,
         max_docs_per_batch,
         max_batch_bytes,
@@ -231,6 +236,7 @@ async fn run_inner(
     store: &mut Store,
     session: Arc<LlmSession>,
     model: &str,
+    fingerprint: &str,
     now: &str,
     max_docs_per_batch: usize,
     max_batch_bytes: usize,
@@ -360,6 +366,7 @@ async fn run_inner(
                                     chunk.pos,
                                     &emb.embedding,
                                     model,
+                                    fingerprint,
                                     now,
                                     *expected_chunks.get(&chunk.hash).unwrap_or(&1),
                                 )
@@ -389,6 +396,7 @@ async fn run_inner(
                                             chunk.pos,
                                             &emb.embedding,
                                             model,
+                                            fingerprint,
                                             now,
                                             *expected_chunks.get(&chunk.hash).unwrap_or(&1),
                                         )

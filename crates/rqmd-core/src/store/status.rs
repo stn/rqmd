@@ -9,11 +9,11 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use super::Result;
 use super::embeddings::get_hashes_needing_embedding;
 use super::path::{days_since_rfc3339, now_rfc3339};
 use super::search::CollectionInfo;
 use super::store_config::get_store_collections;
+use super::Result;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexStatus {
@@ -34,7 +34,7 @@ pub struct IndexHealthInfo {
 /// embedding for `model`, and whether the `vectors_vec` table exists.
 /// Collections are sorted by `last_updated` descending. Mirrors TS
 /// `getStatus` (3989).
-pub fn get_status(conn: &Connection, model: &str) -> Result<IndexStatus> {
+pub fn get_status(conn: &Connection, model: &str, fingerprint: &str) -> Result<IndexStatus> {
     // Per-collection counts.
     let mut stmt = conn.prepare(
         "SELECT collection, COUNT(*) AS active_count, MAX(modified_at) AS last_doc_update
@@ -87,7 +87,7 @@ pub fn get_status(conn: &Connection, model: &str) -> Result<IndexStatus> {
         conn.query_row("SELECT COUNT(*) FROM documents WHERE active = 1", [], |r| {
             r.get(0)
         })?;
-    let needs_embedding = get_hashes_needing_embedding(conn, None, model)?;
+    let needs_embedding = get_hashes_needing_embedding(conn, None, model, fingerprint)?;
     let has_vector_index: Option<i64> = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec'",
@@ -107,8 +107,12 @@ pub fn get_status(conn: &Connection, model: &str) -> Result<IndexStatus> {
 /// Lightweight health check: how many hashes need embedding, total active
 /// doc count, and days since the most recent `modified_at`. Mirrors TS
 /// `getIndexHealth` (2006).
-pub fn get_index_health(conn: &Connection, model: &str) -> Result<IndexHealthInfo> {
-    let needs_embedding = get_hashes_needing_embedding(conn, None, model)?;
+pub fn get_index_health(
+    conn: &Connection,
+    model: &str,
+    fingerprint: &str,
+) -> Result<IndexHealthInfo> {
+    let needs_embedding = get_hashes_needing_embedding(conn, None, model, fingerprint)?;
     let total_docs: i64 =
         conn.query_row("SELECT COUNT(*) FROM documents WHERE active = 1", [], |r| {
             r.get(0)
@@ -138,9 +142,9 @@ pub fn get_index_health(conn: &Connection, model: &str) -> Result<IndexHealthInf
 mod tests {
     use super::*;
     use crate::collections::Collection;
-    use crate::store::Store;
     use crate::store::embeddings::{ensure_vec_table, insert_embedding};
     use crate::store::store_config::upsert_store_collection;
+    use crate::store::Store;
     use rusqlite::params;
     use tempfile::NamedTempFile;
 
@@ -178,7 +182,7 @@ mod tests {
     #[test]
     fn get_status_empty_db_has_zero_counts() {
         let (_t, store) = open_test_store();
-        let s = get_status(&store.conn, "m").unwrap();
+        let s = get_status(&store.conn, "m", "fp").unwrap();
         assert_eq!(s.total_documents, 0);
         assert_eq!(s.needs_embedding, 0);
         assert!(!s.has_vector_index);
@@ -192,7 +196,7 @@ mod tests {
         insert_doc(&store.conn, "c2", "b.md", "h2", "2024-03-01T00:00:00.000Z");
         insert_doc(&store.conn, "c1", "a.md", "h3", "2024-02-01T00:00:00.000Z");
 
-        let s = get_status(&store.conn, "m").unwrap();
+        let s = get_status(&store.conn, "m", "fp").unwrap();
         assert_eq!(s.total_documents, 3);
         assert_eq!(s.needs_embedding, 3); // none embedded yet
         assert!(!s.has_vector_index);
@@ -207,7 +211,7 @@ mod tests {
     #[test]
     fn get_index_health_reports_no_docs() {
         let (_t, store) = open_test_store();
-        let h = get_index_health(&store.conn, "m").unwrap();
+        let h = get_index_health(&store.conn, "m", "fp").unwrap();
         assert_eq!(h.total_docs, 0);
         assert_eq!(h.needs_embedding, 0);
         assert_eq!(h.days_stale, None);
@@ -218,7 +222,7 @@ mod tests {
         let (_t, store) = open_test_store();
         // A doc with a known old timestamp.
         insert_doc(&store.conn, "c", "a.md", "h1", "2020-01-01T00:00:00.000Z");
-        let h = get_index_health(&store.conn, "m").unwrap();
+        let h = get_index_health(&store.conn, "m", "fp").unwrap();
         assert_eq!(h.total_docs, 1);
         assert_eq!(h.needs_embedding, 1);
         // 2020-01-01 → at least 4 years (1460 days) old by 2026.
@@ -255,7 +259,7 @@ mod tests {
             0,
         ); // inactive
 
-        let s = get_status(&store.conn, "m").unwrap();
+        let s = get_status(&store.conn, "m", "fp").unwrap();
         assert_eq!(s.total_documents, 2); // only active
     }
 
@@ -279,7 +283,7 @@ mod tests {
             "2024-01-01T00:00:00.000Z",
         );
 
-        let s = get_status(&store.conn, "m").unwrap();
+        let s = get_status(&store.conn, "m", "fp").unwrap();
         let col = s.collections.iter().find(|c| c.name == "myapp").unwrap();
         assert_eq!(col.path.as_deref(), Some("/test/path"));
         assert_eq!(col.pattern.as_deref(), Some("**/*.md"));
@@ -313,7 +317,7 @@ mod tests {
         );
 
         assert_eq!(
-            get_hashes_needing_embedding(&store.conn, None, "m").unwrap(),
+            get_hashes_needing_embedding(&store.conn, None, "m", "fp").unwrap(),
             2
         );
     }
@@ -340,6 +344,7 @@ mod tests {
             0,
             &[1.0, 2.0, 3.0],
             stale,
+            "fp",
             "2024-01-01T00:00:00.000Z",
             1,
         )
@@ -347,19 +352,24 @@ mod tests {
 
         // Active model still sees hash1 as unembedded.
         assert_eq!(
-            get_hashes_needing_embedding(&store.conn, None, active).unwrap(),
+            get_hashes_needing_embedding(&store.conn, None, active, "fp").unwrap(),
             1
         );
-        assert_eq!(get_status(&store.conn, active).unwrap().needs_embedding, 1);
         assert_eq!(
-            get_index_health(&store.conn, active)
+            get_status(&store.conn, active, "fp")
+                .unwrap()
+                .needs_embedding,
+            1
+        );
+        assert_eq!(
+            get_index_health(&store.conn, active, "fp")
                 .unwrap()
                 .needs_embedding,
             1
         );
         // Stale model: hash1 is complete.
         assert_eq!(
-            get_hashes_needing_embedding(&store.conn, None, stale).unwrap(),
+            get_hashes_needing_embedding(&store.conn, None, stale, "fp").unwrap(),
             0
         );
     }

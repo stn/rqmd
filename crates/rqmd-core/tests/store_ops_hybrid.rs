@@ -69,7 +69,7 @@ fn open_seeded() -> (NamedTempFile, Store) {
         }
         ensure_vec_table(c, 4).unwrap();
         for (hash, _, _, _, emb) in &docs {
-            insert_embedding(c, hash, 0, 0, emb, "m", "ts", 1).unwrap();
+            insert_embedding(c, hash, 0, 0, emb, "m", "fp", "ts", 1).unwrap();
         }
     });
     (tmp, store)
