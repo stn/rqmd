@@ -4,6 +4,7 @@ pub mod bench;
 pub mod cleanup;
 pub mod collection;
 pub mod context;
+pub mod doctor;
 pub mod embed;
 pub mod get;
 pub mod ls;

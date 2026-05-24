@@ -61,6 +61,9 @@ pub enum Command {
     /// Show index + collection health.
     Status,
 
+    /// Diagnose index, runtime, model cache, and device health.
+    Doctor,
+
     /// Re-index all collections (no shell-out; run any pre-update commands manually).
     Update,
 

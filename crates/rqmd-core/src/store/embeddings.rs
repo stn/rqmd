@@ -80,7 +80,10 @@ pub(crate) fn content_vector_expected_chunks_expr(conn: &Connection) -> Result<&
     })
 }
 
-fn vec_table_exists(conn: &Connection) -> Result<bool> {
+/// Whether the `vectors_vec` virtual table exists. It is created lazily on the
+/// first `embed` run ([`ensure_vec_table`]), so a never-embedded index lacks
+/// it; `doctor`'s LLM checks gate on this (qmd `tableExists`).
+pub fn vec_table_exists(conn: &Connection) -> Result<bool> {
     let row: Option<i64> = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec'",
@@ -361,6 +364,84 @@ pub fn insert_embedding(
         params![hash_seq, blob],
     )?;
     Ok(())
+}
+
+// ============================================================================
+// Doctor vector helpers (single-vector kNN / decode / cosine)
+// ============================================================================
+
+/// Nearest stored vector to `embedding` (k=1). Returns `(hash_seq, distance)`
+/// where `distance` is sqlite-vec's cosine distance. `None` when the
+/// `vectors_vec` table is absent or empty. Used by `doctor`'s legacy
+/// fingerprint adoption (qmd `maybeAdoptLegacyEmbeddingFingerprint`).
+pub fn nearest_vector(conn: &Connection, embedding: &[f32]) -> Result<Option<(String, f64)>> {
+    if !vec_table_exists(conn)? {
+        return Ok(None);
+    }
+    // f32 -> u8 is the always-safe cast direction (the bytes are owned by
+    // `embedding`, which is f32-aligned).
+    let blob: &[u8] = bytemuck::cast_slice(embedding);
+    let row = conn
+        .query_row(
+            "SELECT hash_seq, distance FROM vectors_vec WHERE embedding MATCH ? AND k = 1",
+            params![blob],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)),
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// Decode the stored embedding for `hash_seq` back to `f32`. `None` when the
+/// table/row is absent. Used by `doctor`'s vector-sample check.
+///
+/// Decodes via `f32::from_le_bytes` over 4-byte chunks rather than
+/// `bytemuck::cast_slice::<u8, f32>`, which would panic: the `Vec<u8>` returned
+/// by rusqlite is only 1-byte aligned, and `cast_slice` requires f32
+/// alignment. A blob whose length is not a multiple of 4 yields `None`.
+pub fn get_stored_embedding(conn: &Connection, hash_seq: &str) -> Result<Option<Vec<f32>>> {
+    if !vec_table_exists(conn)? {
+        return Ok(None);
+    }
+    let bytes: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT embedding FROM vectors_vec WHERE hash_seq = ?",
+            params![hash_seq],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    if bytes.len() % 4 != 0 {
+        return Ok(None);
+    }
+    let v: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    Ok(Some(v))
+}
+
+/// Cosine distance `1 - cos(a, b)`. Mismatched lengths, empty input, or a
+/// zero-norm vector yield `+∞`. Mirrors qmd `cosineDistance`.
+pub fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return f64::INFINITY;
+    }
+    let mut dot = 0.0f64;
+    let mut norm_a = 0.0f64;
+    let mut norm_b = 0.0f64;
+    for i in 0..a.len() {
+        let av = a[i] as f64;
+        let bv = b[i] as f64;
+        dot += av * bv;
+        norm_a += av * av;
+        norm_b += bv * bv;
+    }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return f64::INFINITY;
+    }
+    1.0 - (dot / (norm_a.sqrt() * norm_b.sqrt()))
 }
 
 /// Clear embeddings globally (`collection == None`) or for one collection.
@@ -1023,5 +1104,88 @@ mod tests {
             search_vec_with_embedding(&store.conn, &[1.0, 0.0, 0.0, 0.0], 5, Some("c2")).unwrap();
         assert_eq!(r2.len(), 1);
         assert_eq!(r2[0].doc.collection_name, "c2");
+    }
+
+    #[test]
+    fn cosine_distance_basics() {
+        // Identical → 0.
+        assert!(cosine_distance(&[1.0, 0.0, 0.0, 0.0], &[1.0, 0.0, 0.0, 0.0]).abs() < 1e-9);
+        // Orthogonal → 1.
+        assert!((cosine_distance(&[1.0, 0.0, 0.0, 0.0], &[0.0, 1.0, 0.0, 0.0]) - 1.0).abs() < 1e-9);
+        // Length mismatch / empty / zero-norm → +∞.
+        assert!(cosine_distance(&[1.0, 0.0], &[1.0, 0.0, 0.0]).is_infinite());
+        assert!(cosine_distance(&[], &[]).is_infinite());
+        assert!(cosine_distance(&[0.0, 0.0], &[1.0, 0.0]).is_infinite());
+    }
+
+    #[test]
+    fn get_stored_embedding_round_trips() {
+        let (_t, store) = open_test_store();
+        insert_doc(&store.conn, "c", "a.md", "body", "h1");
+        ensure_vec_table(&store.conn, 4).unwrap();
+        insert_embedding(
+            &store.conn,
+            "h1",
+            0,
+            0,
+            &[1.0, 2.0, 3.0, 4.0],
+            "m",
+            "fp",
+            "ts",
+            1,
+        )
+        .unwrap();
+
+        let got = get_stored_embedding(&store.conn, "h1_0").unwrap();
+        assert_eq!(got, Some(vec![1.0, 2.0, 3.0, 4.0]));
+        // Missing row → None (not an error).
+        assert_eq!(get_stored_embedding(&store.conn, "nope_0").unwrap(), None);
+    }
+
+    #[test]
+    fn get_stored_embedding_none_without_table() {
+        let (_t, store) = open_test_store();
+        assert_eq!(get_stored_embedding(&store.conn, "h1_0").unwrap(), None);
+    }
+
+    #[test]
+    fn nearest_vector_finds_closest() {
+        let (_t, store) = open_test_store();
+        insert_doc(&store.conn, "c", "a.md", "body-a", "ha");
+        insert_doc(&store.conn, "c", "b.md", "body-b", "hb");
+        ensure_vec_table(&store.conn, 4).unwrap();
+        insert_embedding(
+            &store.conn,
+            "ha",
+            0,
+            0,
+            &[1.0, 0.0, 0.0, 0.0],
+            "m",
+            "fp",
+            "ts",
+            1,
+        )
+        .unwrap();
+        insert_embedding(
+            &store.conn,
+            "hb",
+            0,
+            0,
+            &[0.0, 1.0, 0.0, 0.0],
+            "m",
+            "fp",
+            "ts",
+            1,
+        )
+        .unwrap();
+
+        let (hash_seq, distance) = nearest_vector(&store.conn, &[1.0, 0.0, 0.0, 0.0])
+            .unwrap()
+            .expect("a nearest vector");
+        assert_eq!(hash_seq, "ha_0");
+        assert!(distance < 1e-5, "distance {distance}");
+        // No table → None.
+        let (_t2, empty) = open_test_store();
+        assert_eq!(nearest_vector(&empty.conn, &[1.0; 4]).unwrap(), None);
     }
 }

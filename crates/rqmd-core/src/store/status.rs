@@ -9,11 +9,11 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
 
+use super::Result;
 use super::embeddings::get_hashes_needing_embedding;
 use super::path::{days_since_rfc3339, now_rfc3339};
 use super::search::CollectionInfo;
 use super::store_config::get_store_collections;
-use super::Result;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexStatus {
@@ -142,9 +142,9 @@ pub fn get_index_health(
 mod tests {
     use super::*;
     use crate::collections::Collection;
+    use crate::store::Store;
     use crate::store::embeddings::{ensure_vec_table, insert_embedding};
     use crate::store::store_config::upsert_store_collection;
-    use crate::store::Store;
     use rusqlite::params;
     use tempfile::NamedTempFile;
 

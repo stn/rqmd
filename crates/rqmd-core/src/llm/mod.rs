@@ -13,6 +13,7 @@
 
 pub mod backend;
 pub mod config;
+pub mod device;
 pub mod error;
 pub mod format;
 pub mod gpu;
@@ -26,5 +27,6 @@ pub mod types;
 pub mod worker;
 
 // Module-level convenience re-exports (mirrors the old `llm.ts` exports).
+pub use device::{LlamaBackendDevice, LlamaBackendDeviceType, probe_devices};
 pub use error::{Error, Result};
 pub use format::embedding_fingerprint;
