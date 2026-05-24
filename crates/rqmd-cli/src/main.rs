@@ -80,6 +80,7 @@ async fn run() -> Result<()> {
         Command::MultiGet(a) => commands::multi_get::run(a, &mut state),
         Command::Ls(a) => commands::ls::run(a, &mut state, &palette),
         Command::Status => commands::status::run(&mut state, &palette),
+        Command::Doctor => commands::doctor::run(&mut state, &palette).await,
         Command::Update => commands::update::run(&mut state, &palette),
         Command::Cleanup => commands::cleanup::run(&mut state, &palette),
 

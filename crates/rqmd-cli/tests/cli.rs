@@ -319,21 +319,21 @@ mod cli_status {
         assert!(out.stdout.contains("Collection"), "stdout: {}", out.stdout);
     }
     #[test]
-    fn shows_device_mode_without_native_probing_by_default() {
+    fn status_omits_device_section_doctor_owns_it() {
+        // qmd v2.5.0 parity: GPU/device diagnostics moved out of `status` into
+        // `doctor`. `status` must no longer print a Device section or mention
+        // the retired QMD_STATUS_DEVICE_PROBE knob.
         let e = env();
         e.run(&["collection", "add", "."]).assert_ok();
         let out = e.run(&["status"]);
         out.assert_ok();
-        // qmd parity: the default (no-probe) path prints a Device/Mode section
-        // and tells the user how to opt into the native probe.
-        assert!(out.stdout.contains("Device"), "stdout: {}", out.stdout);
-        assert!(out.stdout.contains("Mode:"), "stdout: {}", out.stdout);
-        assert!(out.stdout.contains("not probed"), "stdout: {}", out.stdout);
+        assert!(!out.stdout.contains("Device"), "stdout: {}", out.stdout);
         assert!(
-            out.stdout.contains("QMD_STATUS_DEVICE_PROBE=1"),
+            !out.stdout.contains("QMD_STATUS_DEVICE_PROBE"),
             "stdout: {}",
             out.stdout
         );
+        assert!(!out.stdout.contains("not probed"), "stdout: {}", out.stdout);
     }
 
     #[test]
@@ -347,6 +347,141 @@ mod cli_status {
         assert!(out.stdout.contains("MCP"), "stdout: {}", out.stdout);
         assert!(out.stdout.contains("Daemon:"), "stdout: {}", out.stdout);
         assert!(out.stdout.contains("not running"), "stdout: {}", out.stdout);
+    }
+}
+
+// ===========================================================================
+// CLI Doctor Command (port of qmd's `qmd doctor` cli tests)
+// ===========================================================================
+mod cli_doctor {
+    use crate::common::*;
+
+    /// Run `rqmd doctor` hermetically: skip the native device probe and point
+    /// the model cache at an empty dir so the model-gated LLM checks (legacy
+    /// adoption / vector sample) skip instead of attempting a model load.
+    fn doctor(e: &Env) -> Out {
+        let cache = e.root.to_string_lossy().to_string();
+        e.run_env(
+            &["doctor"],
+            &[
+                ("QMD_DOCTOR_DEVICE_PROBE", "0"),
+                ("XDG_CACHE_HOME", cache.as_str()),
+            ],
+        )
+    }
+
+    #[test]
+    fn reports_core_index_health_checks() {
+        let e = env();
+        let out = doctor(&e);
+        out.assert_ok();
+        for needle in [
+            "rqmd Doctor",
+            "SQLite runtime",
+            "sqlite-vec",
+            "environment overrides",
+            "model defaults",
+            "model cache",
+            "device mode",
+            "device probe",
+            "embedding freshness",
+            "embedding fingerprints",
+            "embedding vector sample",
+        ] {
+            assert!(
+                out.stdout.contains(needle),
+                "missing `{needle}`\n{}",
+                out.stdout
+            );
+        }
+        // device probe was disabled via the env knob.
+        assert!(
+            out.stdout.contains("skipped by QMD_DOCTOR_DEVICE_PROBE=0"),
+            "stdout: {}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn warns_when_no_collections_configured() {
+        let e = env();
+        let out = doctor(&e);
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("no collections configured"),
+            "stdout: {}",
+            out.stdout
+        );
+        assert!(
+            out.stdout.contains("rqmd collection add ."),
+            "stdout: {}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn flags_invalid_gguf_in_model_cache() {
+        let e = env();
+        // Point the embed model at a local non-GGUF (HTML) file — the cleanest
+        // way to exercise the model-cache check without seeding hf-hub's
+        // snapshot layout (a plain path is inspected directly).
+        let bad = e.root.join("bad-model.gguf");
+        std::fs::write(&bad, "<!doctype html><html>blocked by proxy</html>").unwrap();
+        let bad_str = bad.to_string_lossy().to_string();
+        let cache = e.root.to_string_lossy().to_string();
+        let out = e.run_env(
+            &["doctor"],
+            &[
+                ("QMD_DOCTOR_DEVICE_PROBE", "0"),
+                ("XDG_CACHE_HOME", cache.as_str()),
+                ("QMD_EMBED_MODEL", bad_str.as_str()),
+            ],
+        );
+        out.assert_ok();
+        assert!(out.stdout.contains("model cache"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("invalid 1"), "stdout: {}", out.stdout);
+        assert!(
+            out.stdout.contains("HTML page, not a GGUF model"),
+            "stdout: {}",
+            out.stdout
+        );
+        assert!(
+            out.stdout.contains("rqmd pull --refresh"),
+            "stdout: {}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn flags_mixed_named_fingerprints() {
+        let e = env();
+        // Seed content_vectors with two distinct *named* fingerprints by writing
+        // straight to the index DB (the mixed-fingerprint query reads
+        // content_vectors alone, so no documents/embeddings are needed).
+        {
+            let mut store = rqmd_core::Store::open(&e.db).expect("open store");
+            store.with_connection_mut(|c| {
+                c.execute(
+                    "INSERT INTO content_vectors (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at) \
+                     VALUES ('h1', 0, 0, 'm', 'aaaaaa', 1, 'ts')",
+                    [],
+                )
+                .unwrap();
+                c.execute(
+                    "INSERT INTO content_vectors (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at) \
+                     VALUES ('h2', 0, 0, 'm', 'bbbbbb', 1, 'ts')",
+                    [],
+                )
+                .unwrap();
+            });
+        }
+        let out = doctor(&e);
+        out.assert_ok();
+        assert!(
+            out.stdout.contains("mixed named embedding fingerprints"),
+            "stdout: {}",
+            out.stdout
+        );
     }
 }
 

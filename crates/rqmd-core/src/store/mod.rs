@@ -16,6 +16,7 @@ pub mod cache;
 pub mod chunking;
 pub mod context;
 pub mod docid;
+pub mod doctor;
 pub mod documents;
 pub mod embeddings;
 pub mod lookup;
