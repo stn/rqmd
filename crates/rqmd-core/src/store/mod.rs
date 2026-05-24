@@ -196,6 +196,7 @@ impl Store {
         pos: i64,
         embedding: &[f32],
         model: &str,
+        fingerprint: &str,
         embedded_at: &str,
         total_chunks: i64,
     ) -> Result<()> {
@@ -206,6 +207,7 @@ impl Store {
             pos,
             embedding,
             model,
+            fingerprint,
             embedded_at,
             total_chunks,
         )
@@ -218,13 +220,17 @@ impl Store {
     }
 
     /// See [`status::get_status`].
-    pub fn get_status(&self, model: &str) -> Result<status::IndexStatus> {
-        status::get_status(&self.conn, model)
+    pub fn get_status(&self, model: &str, fingerprint: &str) -> Result<status::IndexStatus> {
+        status::get_status(&self.conn, model, fingerprint)
     }
 
     /// See [`status::get_index_health`].
-    pub fn get_index_health(&self, model: &str) -> Result<status::IndexHealthInfo> {
-        status::get_index_health(&self.conn, model)
+    pub fn get_index_health(
+        &self,
+        model: &str,
+        fingerprint: &str,
+    ) -> Result<status::IndexHealthInfo> {
+        status::get_index_health(&self.conn, model, fingerprint)
     }
 
     /// See [`embeddings::get_hashes_needing_embedding`].
@@ -232,7 +238,8 @@ impl Store {
         &self,
         collection: Option<&str>,
         model: &str,
+        fingerprint: &str,
     ) -> Result<i64> {
-        embeddings::get_hashes_needing_embedding(&self.conn, collection, model)
+        embeddings::get_hashes_needing_embedding(&self.conn, collection, model, fingerprint)
     }
 }

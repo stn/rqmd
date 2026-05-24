@@ -32,7 +32,7 @@ fn open_store_with_docs() -> (NamedTempFile, Store) {
         )
         .unwrap();
         ensure_vec_table(c, 4).unwrap();
-        insert_embedding(c, "h1", 0, 0, &[1.0, 0.0, 0.0, 0.0], "m", "ts", 1).unwrap();
+        insert_embedding(c, "h1", 0, 0, &[1.0, 0.0, 0.0, 0.0], "m", "fp", "ts", 1).unwrap();
     });
 
     (tmp, store)

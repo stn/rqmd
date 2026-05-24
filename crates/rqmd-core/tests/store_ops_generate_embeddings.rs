@@ -52,7 +52,7 @@ async fn force_with_no_docs_returns_zero_and_clears_vectors_table() {
         // No active document → hash is orphaned, but `force=true` should still
         // attempt the clear.
         ensure_vec_table(c, 4).unwrap();
-        insert_embedding(c, "h_stale", 0, 0, &[1.0; 4], "m", "ts", 1).unwrap();
+        insert_embedding(c, "h_stale", 0, 0, &[1.0; 4], "m", "fp", "ts", 1).unwrap();
     });
 
     let llm = ci_mode_llm();

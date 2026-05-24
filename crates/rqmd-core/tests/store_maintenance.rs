@@ -68,12 +68,12 @@ fn cleanup_deletes_orphaned_vectors_and_keeps_active() {
         let keep_hash = hash_content("keep body");
         insert_content(c, &keep_hash, "keep body", &now).unwrap();
         insert_document(c, "docs", "keep.md", "Keep", &keep_hash, &now, &now).unwrap();
-        insert_embedding(c, &keep_hash, 0, 0, &[1.0; 4], "m", &now, 1).unwrap();
+        insert_embedding(c, &keep_hash, 0, 0, &[1.0; 4], "m", "fp", &now, 1).unwrap();
 
         // Orphan embedding — content row exists but no document references it.
         let orphan_hash = hash_content("orphan body");
         insert_content(c, &orphan_hash, "orphan body", &now).unwrap();
-        insert_embedding(c, &orphan_hash, 0, 0, &[2.0; 4], "m", &now, 1).unwrap();
+        insert_embedding(c, &orphan_hash, 0, 0, &[2.0; 4], "m", "fp", &now, 1).unwrap();
     });
 
     let removed = store
