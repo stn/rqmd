@@ -3,10 +3,17 @@
 //! Port of `tobi/qmd`'s `src/store.ts` lines 1247–1365 (`reindexCollection`,
 //! plus its progress / result types). LLM-using embedding generation
 //! (`generateEmbeddings`, lines 1511–1704) is deferred.
+//!
+//! **rqmd divergence**: unlike qmd (which walks with `fast-glob` and reads no
+//! VCS ignore files), rqmd honours a dedicated `.qmdignore` file — per
+//! directory and a global `~/.qmdignore` — using gitignore syntax. `.gitignore`
+//! / `.ignore` are deliberately NOT consulted, so git/ripgrep config never
+//! leaks into the index.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use globset::Glob;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use rusqlite::Connection;
@@ -40,27 +47,48 @@ pub struct ReindexResult {
 const DEFAULT_EXCLUDE_DIRS: &[&str] =
     &["node_modules", ".git", ".cache", "vendor", "dist", "build"];
 
+/// Global `.qmdignore` files applied to every collection, lowest precedence
+/// (a per-directory `.qmdignore` overrides them). Currently just
+/// `~/.qmdignore`, if it exists. Returned as a list so callers can pass it to
+/// [`reindex_collection`]'s `extra_ignore_files`, and so tests can inject their
+/// own paths instead of touching the real home directory.
+pub fn global_qmdignore_files() -> Vec<PathBuf> {
+    dirs::home_dir()
+        .map(|h| h.join(".qmdignore"))
+        .filter(|p| p.exists())
+        .into_iter()
+        .collect()
+}
+
 /// Walk `collection_path` matching `glob_pattern`, syncing the result into
 /// the index. `on_progress`, if provided, is called once per file.
 ///
 /// `ignore_patterns` are added to the default exclude list and matched as
-/// gitignore patterns.
+/// gitignore patterns. `extra_ignore_files` are additional global `.qmdignore`
+/// files (e.g. `~/.qmdignore` via [`global_qmdignore_files`]) applied at the
+/// lowest precedence — a per-directory `.qmdignore` overrides them.
+///
+/// `.gitignore` / `.ignore` and VCS-global ignores are NOT consulted; only
+/// `.qmdignore` files, the default excludes, and `ignore_patterns` filter the
+/// walk.
 pub fn reindex_collection(
     conn: &mut Connection,
     collection_path: &Path,
     glob_pattern: &str,
     collection_name: &str,
     ignore_patterns: &[String],
+    extra_ignore_files: &[PathBuf],
     mut on_progress: impl FnMut(&ReindexProgress),
 ) -> Result<ReindexResult> {
     let now = now_rfc3339();
 
-    // Build the override matcher: include the user's pattern, then negate
-    // the default + custom ignores.
+    // Exclude-only override matcher: the default dir excludes + the user's
+    // `ignore_patterns`. The include `glob_pattern` is matched separately
+    // (below) rather than as an override whitelist: in the `ignore` crate an
+    // override match has the highest precedence and short-circuits before any
+    // `.qmdignore` is consulted, which would make `.qmdignore` file patterns
+    // ineffective for matched files.
     let mut overrides = OverrideBuilder::new(collection_path);
-    overrides
-        .add(glob_pattern)
-        .map_err(|e| Error::InvalidGlob(format!("{glob_pattern}: {e}")))?;
     for d in DEFAULT_EXCLUDE_DIRS {
         let pat = format!("!**/{d}/**");
         overrides
@@ -77,13 +105,28 @@ pub fn reindex_collection(
         .build()
         .map_err(|e| Error::InvalidGlob(format!("override build: {e}")))?;
 
+    // Include matcher for `glob_pattern`, applied per file during collection.
+    let include = Glob::new(glob_pattern)
+        .map_err(|e| Error::InvalidGlob(format!("{glob_pattern}: {e}")))?
+        .compile_matcher();
+
     // Walk the tree, collecting file relative paths first so we can report
-    // a `total` to the progress callback.
-    let walker = WalkBuilder::new(collection_path)
-        .hidden(true)
+    // a `total` to the progress callback. `standard_filters(false)` disables
+    // the `ignore` crate's `.gitignore` / `.ignore` / global-git / hidden /
+    // parents handling; we re-enable only a dedicated `.qmdignore` (per
+    // directory) plus the explicit global files in `extra_ignore_files`.
+    let mut wb = WalkBuilder::new(collection_path);
+    wb.standard_filters(false)
+        .add_custom_ignore_filename(".qmdignore")
         .follow_links(false)
-        .overrides(overrides)
-        .build();
+        .overrides(overrides);
+    for f in extra_ignore_files {
+        // Lowest precedence; a per-directory `.qmdignore` overrides these.
+        // `add_ignore` returns `Option<Error>` for partial failures (e.g. a
+        // bad glob in the file); ignore it so one bad line can't abort indexing.
+        let _ = wb.add_ignore(f);
+    }
+    let walker = wb.build();
 
     let mut files: Vec<(std::path::PathBuf, String)> = Vec::new();
     for dent in walker.flatten() {
@@ -98,6 +141,10 @@ pub fn reindex_collection(
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         // Skip dotfiles / dotted directories anywhere in the path.
         if rel_str.split('/').any(|seg| seg.starts_with('.')) {
+            continue;
+        }
+        // Apply the include pattern (replaces the former override whitelist).
+        if !include.is_match(&rel_str) {
             continue;
         }
         files.push((abs.to_path_buf(), rel_str));

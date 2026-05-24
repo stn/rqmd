@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use rqmd_core::store::cache::clear_cache;
 use rqmd_core::store::context::list_collections;
-use rqmd_core::store::reindex::reindex_collection;
+use rqmd_core::store::reindex::{global_qmdignore_files, reindex_collection};
 
 use crate::color::Palette;
 use crate::state::IndexState;
@@ -57,6 +57,9 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
         p.reset()
     );
 
+    // Resolved once and shared across all collections (lowest precedence).
+    let global_ignore = global_qmdignore_files();
+
     for (i, (name, path, pattern, ignore)) in snapshot.iter().enumerate() {
         println!(
             "{}[{}/{}]{} {}{name}{} {}({pattern}){}",
@@ -73,7 +76,7 @@ pub fn run(state: &mut IndexState, p: &Palette) -> Result<()> {
 
         let store = state.store_mut()?;
         let result = store.with_connection_mut(|conn| {
-            reindex_collection(conn, path, pattern, name, ignore, |info| {
+            reindex_collection(conn, path, pattern, name, ignore, &global_ignore, |info| {
                 eprint!("\rIndexing: {}/{}        ", info.current, info.total);
             })
         })?;

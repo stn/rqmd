@@ -152,11 +152,20 @@ fn add(a: CollectionAddArgs, state: &mut IndexState, p: &Palette) -> Result<()> 
         .and_then(|c| c.collection.ignore.clone())
         .unwrap_or_default();
 
+    let global_ignore = reindex::global_qmdignore_files();
     let store = state.store_mut()?;
     let result = store.with_connection_mut(|conn| {
-        reindex::reindex_collection(conn, &resolved, &pattern, &name, &ignore, |info| {
-            eprint!("\rIndexing: {}/{}        ", info.current, info.total);
-        })
+        reindex::reindex_collection(
+            conn,
+            &resolved,
+            &pattern,
+            &name,
+            &ignore,
+            &global_ignore,
+            |info| {
+                eprint!("\rIndexing: {}/{}        ", info.current, info.total);
+            },
+        )
     })?;
     eprintln!();
     println!(
