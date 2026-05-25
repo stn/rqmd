@@ -130,7 +130,7 @@ pub use rqmd_store::{
 };
 
 // Bench module re-exports (pure scoring + fixture/result types). The runner
-// itself is CLI-only and lives in `rqmd-cli`.
+// itself is CLI-only and lives in `rqmd`.
 pub use bench::{
     BackendResult, BenchmarkFixture, BenchmarkQuery, BenchmarkResult, QueryResult, ScoreMetrics,
     SummaryStats, normalize_path, paths_match, score_results,

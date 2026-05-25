@@ -10,7 +10,7 @@
 //! - AST break point extraction at function / class / import boundaries,
 //!   producing [`BreakPoint`]s that merge cleanly with the regex-based break
 //!   points from [`super::chunking`].
-//! - A status probe used by `rqmd-cli status` to report grammar availability.
+//! - A status probe used by `rqmd status` to report grammar availability.
 //!
 //! All public functions degrade gracefully: unsupported language, query
 //! compile failure, and parse failure each return an empty `Vec`.

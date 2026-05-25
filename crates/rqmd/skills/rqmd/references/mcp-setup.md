@@ -7,7 +7,7 @@ Build from source (works today):
 ```bash
 git clone https://github.com/stn/rqmd
 cd rqmd
-cargo install --path crates/rqmd-cli
+cargo install --path crates/rqmd
 # once published to crates.io: cargo install rqmd
 ```
 

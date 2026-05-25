@@ -3,16 +3,18 @@ resolver = "3"
 members = [
     "crates/rqmd-core",
     "crates/rqmd-mcp",
-    "crates/rqmd-cli",
+    "crates/rqmd",
 ]
 
 [workspace.package]
-version     = "0.0.1"
-edition     = "2024"
-license     = "MIT"
-authors     = ["Akira Ishino <akira@lumilab.jp>"]
-repository  = "https://github.com/stn/rqmd"
-description = "Rust port of tobi/qmd — on-device hybrid search for markdown"
+version      = "0.0.1"
+edition      = "2024"
+rust-version = "1.85"
+license      = "MIT"
+authors      = ["Akira Ishino <akira@lumilab.jp>"]
+repository   = "https://github.com/stn/rqmd"
+homepage     = "https://github.com/stn/rqmd"
+description  = "Rust port of tobi/qmd — on-device hybrid search for markdown"
 
 [workspace.dependencies]
 rqmd-core = { path = "crates/rqmd-core", version = "0.0.1" }

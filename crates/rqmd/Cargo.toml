@@ -1,11 +1,16 @@
 [package]
-name        = "rqmd-cli"
+name        = "rqmd"
 description = "rqmd: command-line interface (binary `rqmd`)"
-version.workspace    = true
-edition.workspace    = true
-license.workspace    = true
-authors.workspace    = true
-repository.workspace = true
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+rust-version.workspace = true
+readme      = "README.md"
+keywords    = ["search", "markdown", "cli", "embeddings", "rag"]
+categories  = ["command-line-utilities", "text-processing"]
 
 [[bin]]
 name = "rqmd"
@@ -63,7 +68,7 @@ ureq       = { version = "2", default-features = false, features = ["json"] }
 
 [features]
 # GPU backends re-exported from rqmd-core so users can invoke `cargo build -p
-# rqmd-cli --features metal` (etc.) without referencing the core crate name.
+# rqmd --features metal` (etc.) without referencing the core crate name.
 metal  = ["rqmd-core/metal"]
 cuda   = ["rqmd-core/cuda"]
 vulkan = ["rqmd-core/vulkan"]

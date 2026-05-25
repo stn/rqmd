@@ -11,7 +11,7 @@
 //!   when a GPU backend is compiled in).
 //! * `Auto` means "use whichever backend was compiled in" — Cargo
 //!   features `metal` / `cuda` / `vulkan` on the `rqmd-core` crate
-//!   (also re-exported by `rqmd-cli`).
+//!   (also re-exported by the `rqmd` CLI).
 //!
 //! For input compatibility with qmd we still accept the original env
 //! values; "metal" / "vulkan" / "cuda" emit a warning explaining the

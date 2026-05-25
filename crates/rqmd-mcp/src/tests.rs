@@ -8,7 +8,7 @@
 //! the closest port of qmd's "MCP HTTP Transport" block. All three assert the
 //! qmd parity points (server name, tool list, and the absolute-line snippet from
 //! `tobi/qmd/test/mcp.test.ts:1094-1117`). The matching real-stdio roundtrip
-//! against the spawned `rqmd mcp` binary lives in `rqmd-cli/tests/mcp_stdio.rs`.
+//! against the spawned `rqmd mcp` binary lives in `rqmd/tests/mcp_stdio.rs`.
 //!
 //! All assertions here are LLM-free: `status`/`get`/`read_resource` are pure
 //! SQL, and the `query` cases use `lex` sub-queries with `rerank: false`, which
