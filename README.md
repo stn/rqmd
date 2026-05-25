@@ -38,14 +38,14 @@ need a toolchain:
 
 ## Install
 
-Not on crates.io yet, so install straight from the repo — this builds from
-source and puts the `rqmd` binary in `~/.cargo/bin`:
+Install from crates.io — this builds from source and puts the `rqmd` binary in
+`~/.cargo/bin`:
 
 ```sh
-cargo install --git https://github.com/stn/rqmd rqmd
+cargo install rqmd
 ```
 
-Or from a local clone:
+Or from a local clone (for development):
 
 ```sh
 cargo install --path crates/rqmd
@@ -55,9 +55,9 @@ GPU acceleration is opt-in; the default install is **CPU-only**. Add a backend
 feature to either command:
 
 ```sh
-cargo install --path crates/rqmd --features metal    # macOS
-cargo install --path crates/rqmd --features cuda     # NVIDIA
-cargo install --path crates/rqmd --features vulkan   # cross-vendor
+cargo install rqmd --features metal    # macOS
+cargo install rqmd --features cuda     # NVIDIA
+cargo install rqmd --features vulkan   # cross-vendor
 ```
 
 At runtime, `--no-gpu` forces CPU even on a GPU build. For development, run from

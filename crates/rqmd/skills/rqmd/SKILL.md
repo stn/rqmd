@@ -167,13 +167,10 @@ rqmd search "six-week cadence WhatsApp merchant relationships Shawn Ryan" -c sou
 Only mutate indexes when the user asked for setup or maintenance. Searching and
 retrieving are safe; collection/index mutation is not a casual first step.
 
-Build from source:
+Install from crates.io:
 
 ```bash
-git clone https://github.com/stn/rqmd
-cd rqmd
-cargo install --path crates/rqmd
-# once published to crates.io: cargo install rqmd
+cargo install rqmd
 ```
 
 Then create and maintain an index:

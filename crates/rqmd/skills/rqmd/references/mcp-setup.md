@@ -2,13 +2,8 @@
 
 ## Install
 
-Build from source (works today):
-
 ```bash
-git clone https://github.com/stn/rqmd
-cd rqmd
-cargo install --path crates/rqmd
-# once published to crates.io: cargo install rqmd
+cargo install rqmd
 ```
 
 Then create an index:
