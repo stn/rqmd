@@ -229,7 +229,7 @@ impl RqmdStore {
         // global_context defined in YAML or inline config are visible to
         // `list_collections`, `update`, `add_context`, etc. immediately after
         // open. Mirrors qmd `createStore` (`index.ts:362,367`) and the CLI
-        // (`rqmd-cli state.rs`). DB-only mode (no config) skips this and keeps
+        // (`rqmd state.rs`). DB-only mode (no config) skips this and keeps
         // whatever is already in `store_collections`.
         if let Some(cfg) = config.as_ref() {
             inner.with_connection_mut(|c| sync_config_to_db(c, cfg))?;

@@ -1,4 +1,4 @@
-# rqmd
+# RQMD
 
 On-device hybrid search for your markdown — notes, meeting transcripts, docs,
 knowledge bases, whatever you need to remember.
@@ -42,26 +42,26 @@ Not on crates.io yet, so install straight from the repo — this builds from
 source and puts the `rqmd` binary in `~/.cargo/bin`:
 
 ```sh
-cargo install --git https://github.com/stn/rqmd rqmd-cli
+cargo install --git https://github.com/stn/rqmd rqmd
 ```
 
 Or from a local clone:
 
 ```sh
-cargo install --path crates/rqmd-cli
+cargo install --path crates/rqmd
 ```
 
 GPU acceleration is opt-in; the default install is **CPU-only**. Add a backend
 feature to either command:
 
 ```sh
-cargo install --path crates/rqmd-cli --features metal    # macOS
-cargo install --path crates/rqmd-cli --features cuda     # NVIDIA
-cargo install --path crates/rqmd-cli --features vulkan   # cross-vendor
+cargo install --path crates/rqmd --features metal    # macOS
+cargo install --path crates/rqmd --features cuda     # NVIDIA
+cargo install --path crates/rqmd --features vulkan   # cross-vendor
 ```
 
 At runtime, `--no-gpu` forces CPU even on a GPU build. For development, run from
-a clone with `cargo run -p rqmd-cli -- <args>`.
+a clone with `cargo run -p rqmd -- <args>`.
 
 ## Quickstart
 
@@ -161,7 +161,7 @@ Defaults (overridable via `QMD_EMBED_MODEL` / `QMD_GENERATE_MODEL` /
 |-------------|---------------------------------------------------------------------|---------------------------------------------------------|
 | `rqmd-core` | Engine: store (FTS5/db/chunking/AST), store-ops (hybrid/rerank/expand/embed), llm (llama.cpp), bench | `src/store.ts`, `src/db.ts`, `src/ast.ts`, `src/llm.ts` |
 | `rqmd-mcp`  | MCP server library (stdio + HTTP), launched via `rqmd mcp`          | `src/mcp/server.ts`                                      |
-| `rqmd-cli`  | The `rqmd` binary and all subcommands                               | `src/cli/qmd.ts`                                         |
+| `rqmd`      | The `rqmd` binary and all subcommands                               | `src/cli/qmd.ts`                                         |
 
 ## Differences from qmd
 

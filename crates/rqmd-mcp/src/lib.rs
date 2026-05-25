@@ -11,7 +11,7 @@
 //! Built on the official [`rmcp`] SDK (the analog of qmd's
 //! `@modelcontextprotocol/sdk`) with a manual [`QmdMcpServer`] handler so tool
 //! schemas, descriptions, annotations, and response shapes match qmd. Launched
-//! from `rqmd-cli` via the `rqmd mcp` subcommand.
+//! from the `rqmd` CLI via the `rqmd mcp` subcommand.
 //!
 //! Runtime: requires a tokio runtime (the underlying `RqmdStore` search path is
 //! async).

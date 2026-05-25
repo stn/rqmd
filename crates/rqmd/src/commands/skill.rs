@@ -17,10 +17,11 @@ use crate::color::Palette;
 
 /// The single bundled skill's name (and its install / search dir basename).
 const SKILL_NAME: &str = "rqmd";
-/// Embedded `SKILL.md` (relative to this file: `<crate>/../../skills/rqmd/…`).
-const SKILL_MD: &str = include_str!("../../../../skills/rqmd/SKILL.md");
+/// Embedded `SKILL.md` (relative to this file: `<crate>/skills/rqmd/…`). The
+/// asset lives inside the crate so it ships in the published `.crate` tarball.
+const SKILL_MD: &str = include_str!("../../skills/rqmd/SKILL.md");
 /// Embedded supplementary reference, appended by `skills get --full`.
-const MCP_SETUP_MD: &str = include_str!("../../../../skills/rqmd/references/mcp-setup.md");
+const MCP_SETUP_MD: &str = include_str!("../../skills/rqmd/references/mcp-setup.md");
 /// Relative path used for the `--full` separator header (qmd parity).
 const MCP_SETUP_REL: &str = "references/mcp-setup.md";
 
@@ -121,10 +122,11 @@ fn path(args: SkillsPathArgs) -> Result<()> {
 }
 
 /// On-disk directory for the bundled skill. `RQMD_SKILLS_DIR` (mirrors qmd's
-/// `QMD_SKILLS_DIR`) overrides; otherwise derive the repo path from
-/// `CARGO_MANIFEST_DIR` at compile time. NOTE: the fallback path won't exist on
-/// an installed binary — `skills get`/`skill show` serve the *embedded* content
-/// regardless, and the `skills path` test only checks the path suffix.
+/// `QMD_SKILLS_DIR`) overrides; otherwise derive it from the crate's in-tree
+/// `skills/` dir via `CARGO_MANIFEST_DIR` at compile time. NOTE: the fallback
+/// path won't exist on an installed binary — `skills get`/`skill show` serve the
+/// *embedded* content regardless, and the `skills path` test only checks the
+/// path suffix.
 fn skills_dir() -> PathBuf {
     if let Ok(d) = std::env::var("RQMD_SKILLS_DIR") {
         let d = d.trim();
@@ -133,9 +135,7 @@ fn skills_dir() -> PathBuf {
         }
     }
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop(); // crates/rqmd-cli -> crates
-    p.pop(); // crates -> repo root
-    p.push("skills");
+    p.push("skills"); // <crate>/skills (bundled in the published tarball)
     p.push(SKILL_NAME);
     p
 }

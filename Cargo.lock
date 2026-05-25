@@ -1963,7 +1963,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rqmd-cli"
+name = "rqmd"
 version = "0.0.1"
 dependencies = [
  "anyhow",
