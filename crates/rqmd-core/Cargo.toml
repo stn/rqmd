@@ -7,7 +7,6 @@ license.workspace      = true
 authors.workspace      = true
 repository.workspace   = true
 homepage.workspace     = true
-rust-version.workspace = true
 readme      = "README.md"
 keywords    = ["search", "markdown", "embeddings", "semantic-search", "sqlite"]
 categories  = ["text-processing", "database"]
@@ -61,9 +60,8 @@ streaming-iterator     = "0.1"
 llama-cpp-2 = "0.1"
 encoding_rs = "0.8"
 
-# HuggingFace model download. Pinned to 0.4 to match upstream llama-cpp-rs
-# workspace; verify 0.4 vs 0.5 snapshot semantics before bumping.
-hf-hub = "0.4"
+# HuggingFace model download.
+hf-hub = "0.5"
 
 # Async runtime — the `llm` module's public `Llm` trait is async, and parallel
 # embed / rerank fan-out uses tokio::sync::oneshot to bridge the dedicated FFI
@@ -77,7 +75,7 @@ futures     = "0.3"
 # across an .await (clippy::await_holding_lock would reject that).
 arc-swap = "1"
 
-dirs    = "5"
+dirs    = "6"
 tracing = "0.1"
 
 [dev-dependencies]

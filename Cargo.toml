@@ -9,7 +9,6 @@ members = [
 [workspace.package]
 version      = "0.0.1"
 edition      = "2024"
-rust-version = "1.85"
 license      = "MIT"
 authors      = ["Akira Ishino <akira@lumilab.jp>"]
 repository   = "https://github.com/stn/rqmd"
