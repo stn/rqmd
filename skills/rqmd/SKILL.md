@@ -11,83 +11,112 @@ allowed-tools: Bash(rqmd:*), mcp__rqmd__*
 
 # rqmd — Query Markdown Documents
 
-rqmd is a local search and retrieval engine for markdown collections: notes, docs,
-wikis, transcripts, and project knowledge bases. Use it before generic web search
-when the user is asking about something that may already live in their indexed
-local markdown.
+## How search works
 
-## Status Check
+rqmd searches local markdown collections: notes, docs, wikis, transcripts, and
+project knowledge bases. Use it before web search when the answer may already be
+in indexed local files.
 
-Start by checking what rqmd can see:
+The workflow is always:
+
+1. Search for candidate documents.
+2. Retrieve the full source with `rqmd get` or `rqmd multi-get`.
+3. Answer from retrieved text, citing paths or docids.
+
+Do not answer from snippets alone when the user needs facts, decisions, quotes,
+or nuance. Snippets are only leads.
+
+Typical loop:
 
 ```bash
-rqmd collection list
-rqmd ls
+rqmd search "merchant reality support interviews" -n 5
+# leads: #abc123 concepts/customer-proximity.md; #def432 sources/merchant-call.md
+rqmd multi-get 'concepts/customer-proximity.md,sources/merchant-call.md' --md
 ```
 
-For health details:
+For harder searches, use `rqmd query` structured queries with `intent:`, `lex:`,
+`vec:`, and `hyde:` fields.
 
-```bash
-rqmd status
+When reporting what you retrieved, a compact note is enough; do not paste whole
+files unless needed:
+
+```text
+Retrieved:
+- #abc123 concepts/customer-proximity.md
+- #def432 sources/merchant-call.md
 ```
 
-If rqmd is not installed, build it from source (see **Setup** below).
+## Pick the right search mode
 
-## Retrieval Workflow
-
-1. **Discover collections** with `rqmd collection list` or `rqmd ls`.
-2. **Search first**, usually with a small result count.
-3. **Retrieve source documents** with `rqmd get` or `rqmd multi-get`.
-4. **Answer from the retrieved text**, citing file paths or docids.
-5. **If results are weak**, rewrite the query using a different search mode.
-
-Do not answer from search-result snippets alone when the user needs substance.
-Fetch the document.
-
-## Search Modes
-
-### Fast lexical search
-
-Use BM25 when you know names, exact terms, titles, identifiers, or code symbols:
+Use **BM25 lexical search** when you know exact words, titles, names, code
+symbols, or rare phrases:
 
 ```bash
 rqmd search "cockpit OKR Goodhart" -n 10
 rqmd search '"AI Before Headcount"' -c concepts -n 5
 ```
 
-Good lexical queries are short: 2-6 discriminative terms, quoted phrases when
-exact, and no filler words.
-
-### Hybrid query search
-
-Use `rqmd query` when semantic recall, query expansion, vector search, or
-reranking matters more than speed:
+Use **hybrid semantic search** when the user describes an idea indirectly, uses
+different wording than the source, or needs conceptual recall:
 
 ```bash
 rqmd query "decision quality depends on surfacing assumptions and context" -n 10
 rqmd query --json --explain "metrics as cockpit instruments but not OKRs"
 ```
 
-`rqmd query` may initialize local models. If models/GPU are unavailable, slow, or
-crashing, fall back to `rqmd search` with better lexical terms — or force CPU mode
-with the global `--no-gpu` flag.
-
-### Structured queries
-
-For subtle wiki/doc searches, structured query documents are usually strongest:
+Use **structured queries** for hard searches. They combine exact anchors with
+semantic recall:
 
 ```bash
 rqmd query $'intent: Find the concept note about metrics as instruments without letting OKRs replace judgment.\nlex: cockpit instruments OKR Goodhart metrics judgment\nvec: data informed not metric driven product judgment\nhyde: A concept note says metrics are useful like cockpit instruments, but leaders should remain data-informed rather than metric-driven because OKRs and dashboards can Goodhart product judgment.'
 ```
 
-Use this pattern when the user's wording is indirect:
+Structured query fields:
 
-- `intent:` disambiguates the target.
-- `lex:` anchors exact names, phrases, aliases, and rare terms.
-- `vec:` adds the semantic paraphrase.
-- `hyde:` describes the document that would answer the query.
+- `intent:` states what you are trying to find and what to avoid.
+- `lex:` uses exact terms, aliases, titles, and rare words.
+- `vec:` paraphrases the idea in natural language.
+- `hyde:` describes the document or answer that would satisfy the request.
 
-Put the best query first; early searches receive more weight in fusion.
+If `rqmd query` is slow or model/GPU setup fails, fall back to `rqmd search` with
+better lexical terms (or force CPU with the global `--no-gpu` flag).
+
+## Retrieve sources
+
+Search results include docids like `#abc123` and `qmd://...` paths. Fetch them:
+
+```bash
+rqmd get "#abc123"
+rqmd get qmd://concepts/ai-before-headcount.md --full
+rqmd multi-get 'concepts/{ai-before-headcount.md,data-informed-not-metric-driven.md}' --md
+rqmd multi-get 'sources/podcast-2025-*.md' -l 80
+```
+
+`rqmd get` returns the full document by default (`--full` is accepted for
+compatibility). Slice with `--from` / `-l`, and add `--line-numbers` to prefix
+each line with its number. Use `multi-get` — a glob or comma-separated list of
+paths — when comparing several hits or gathering context across pages.
+
+Note: rqmd keeps qmd's `qmd://` virtual-path scheme for compatibility — search
+JSON output, `get`, and `ls` all use `qmd://`. `multi-get` resolves paths and
+globs (not docids); fetch a single docid with `rqmd get "#abc123"`.
+
+## Discover what is indexed
+
+```bash
+rqmd collection list
+rqmd ls
+rqmd status
+```
+
+Add collection filters when broad searches drift into the wrong corpus:
+
+```bash
+rqmd search "headcount autonomous agents" -c concepts -n 10
+rqmd query "merchant support product reality" -c concepts -c sources -n 10
+```
+
+Omit `-c` to search everything.
 
 ## MCP Tool: `query`
 
@@ -106,39 +135,13 @@ When using the MCP server, prefer structured searches:
 }
 ```
 
-### Query Types
+Query types:
 
 - `lex` — BM25 keyword search. Best for exact terms, names, titles, and code.
 - `vec` — vector semantic search. Best for natural-language concepts.
 - `hyde` — vector search using a hypothetical answer/document passage.
 
-## Retrieval Commands
-
-```bash
-rqmd get "#abc123"                        # retrieve by docid
-rqmd get qmd://concepts/ai-before-headcount.md
-rqmd multi-get 'concepts/{ai-before-headcount.md,data-informed-not-metric-driven.md}' --md
-rqmd multi-get 'sources/podcast-2025-*.md' -l 80
-```
-
-`rqmd get` returns the full document by default; use `--from` / `-l` to slice a
-line range and `--line-numbers` to prefix lines. Use `multi-get` when comparing
-several hits or gathering context across pages.
-
-Note: the `qmd://` URI scheme is intentional — rqmd keeps qmd's virtual-path
-scheme for compatibility (search JSON output, `get`, and `ls` all use `qmd://`).
-
-## Collection Filtering
-
-```bash
-rqmd search "headcount autonomous agents" -c concepts -n 10
-rqmd query "merchant support product reality" -c concepts -c sources -n 10
-```
-
-Omit `-c` to search the default collections. Add collection filters when a broad
-query drifts into the wrong corpus.
-
-## Query Craft
+## Query craft
 
 Good rqmd searches mix three things:
 
@@ -159,9 +162,12 @@ rqmd query $'intent: Find the customer proximity concept, not generic customer d
 rqmd search "six-week cadence WhatsApp merchant relationships Shawn Ryan" -c sources -n 10
 ```
 
-## Setup
+## Setup and maintenance
 
-Build from source (works today):
+Only mutate indexes when the user asked for setup or maintenance. Searching and
+retrieving are safe; collection/index mutation is not a casual first step.
+
+Build from source:
 
 ```bash
 git clone https://github.com/stn/rqmd
@@ -170,19 +176,28 @@ cargo install --path crates/rqmd-cli
 # once published to crates.io: cargo install rqmd
 ```
 
-Then create an index:
+Then create and maintain an index:
 
 ```bash
 rqmd collection add ~/notes --name notes
-rqmd pull            # optional: pre-download models (otherwise fetched on first use)
+rqmd update
 rqmd embed
 ```
 
-Only add collections or generate embeddings when the user asked for setup or index
-maintenance. Searching and retrieving are safe; collection/index mutation is not a
-casual first step.
+Health and diagnostics:
 
-## MCP Setup
+```bash
+rqmd doctor
+rqmd status
+rqmd pull
+```
+
+`rqmd doctor` checks index config, model cache, device/GPU setup, vector
+fingerprints, and common environment overrides. If a model-backed command fails,
+run it before changing configuration. `rqmd pull` pre-downloads the configured
+models (otherwise fetched on first use).
+
+## MCP setup
 
 See `references/mcp-setup.md` for Claude Code, Claude Desktop, OpenClaw, and HTTP
 server configuration.
@@ -200,5 +215,5 @@ server configuration.
 - **Ambiguous user wording needs intent.** Add `intent:` rather than hoping query
   expansion guesses the right domain.
 - **Collection names matter.** Search `concepts` for synthesized wiki pages,
-  `sources` for transcripts/raw source pages, and docs collections for code/project
-  documentation.
+  `sources` for transcripts/raw source pages, and docs collections for code or
+  project documentation.
