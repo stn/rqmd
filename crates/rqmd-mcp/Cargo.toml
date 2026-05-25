@@ -7,7 +7,6 @@ license.workspace      = true
 authors.workspace      = true
 repository.workspace   = true
 homepage.workspace     = true
-rust-version.workspace = true
 readme      = "README.md"
 keywords    = ["mcp", "search", "markdown", "server", "rag"]
 categories  = ["network-programming", "web-programming::http-server"]

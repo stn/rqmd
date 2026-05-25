@@ -858,8 +858,7 @@ fn run_chat_decode(
 
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut output = String::new();
-    let mut n_cur = batch.n_tokens();
-    for _ in 0..max_new_tokens {
+    for (n_cur, _) in (batch.n_tokens()..).zip(0..max_new_tokens) {
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(token);
         if model.is_eog_token(token) {
@@ -878,7 +877,6 @@ fn run_chat_decode(
         batch
             .add(token, n_cur, &[0], true)
             .map_err(|e| Error::Llama(format!("batch.add (loop): {e}")))?;
-        n_cur += 1;
         ctx.decode(&mut batch)
             .map_err(|e| Error::Llama(format!("loop ctx.decode: {e}")))?;
     }
