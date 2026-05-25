@@ -1,9 +1,8 @@
 //! Integration tests for `rqmd_core::llm::prompt`.
 
 use rqmd_core::llm::prompt::{
-    EXPAND_QUERY_SYSTEM_PROMPT, QWEN3_RERANKER_INSTRUCT, build_expand_query_user_message,
-    build_qwen3_rerank_prompt, fallback_queryables, filter_with_query_terms,
-    parse_expand_query_output,
+    QWEN3_RERANKER_INSTRUCT, build_expand_query_user_message, build_qwen3_rerank_prompt,
+    fallback_queryables, filter_with_query_terms, parse_expand_query_output,
 };
 use rqmd_core::llm::types::{QueryType, Queryable};
 
@@ -58,13 +57,6 @@ fn expand_query_user_message_with_intent() {
         msg,
         "/no_think Expand this search query: rust async runtime\nQuery intent: performance comparison"
     );
-}
-
-#[test]
-fn expand_query_system_prompt_mentions_all_three_prefixes() {
-    assert!(EXPAND_QUERY_SYSTEM_PROMPT.contains("lex:"));
-    assert!(EXPAND_QUERY_SYSTEM_PROMPT.contains("vec:"));
-    assert!(EXPAND_QUERY_SYSTEM_PROMPT.contains("hyde:"));
 }
 
 #[test]

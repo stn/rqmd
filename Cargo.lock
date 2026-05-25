@@ -2061,7 +2061,6 @@ dependencies = [
  "async-trait",
  "bytemuck",
  "dirs",
- "encoding_rs",
  "form_urlencoded",
  "futures",
  "globset",
