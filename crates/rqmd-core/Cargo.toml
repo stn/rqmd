@@ -58,7 +58,6 @@ streaming-iterator     = "0.1"
 # future contributor switches to `default-features = false`, they MUST add
 # `features = ["openmp"]` back, or batch embedding becomes single-threaded.
 llama-cpp-2 = "0.1"
-encoding_rs = "0.8"
 
 # HuggingFace model download.
 hf-hub = "0.5"

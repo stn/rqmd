@@ -10,12 +10,17 @@
 //!   `{query}</s><s>{doc}` placeholder. The yes/no judgment isn't read
 //!   under `pooling=Rank`, but the prompt *shape* is what the rank head
 //!   was trained on.
-//! * `expand_query` system message that biases the model toward emitting
-//!   `lex: ... / vec: ... / hyde: ...` lines without relying on GBNF
-//!   grammar enforcement (spike #4 ruled grammar out as brittle).
-//!
-//! No `LlamaModel` dependency yet — PR2 will add the chat-template
-//! wrappers that combine these strings into the final tokenizable form.
+//! * `expand_query` user message. The fine-tuned `qmd-query-expansion-1.7B`
+//!   model was trained in qmd's exact setup: *no system message*, only the
+//!   `/no_think Expand this search query: ...` user turn. Adding a system
+//!   prompt (the previous rqmd approach) put the model out of distribution
+//!   and made it drift to its Qwen3 base Chinese prior on some backends; we
+//!   mirror qmd verbatim instead. Output is also constrained with the same
+//!   GBNF grammar qmd uses ([`EXPAND_QUERY_GRAMMAR`]); `sample_token` in
+//!   `llama_cpp.rs` applies it via llama.cpp's reference grammar-first flow,
+//!   which sidesteps the grammar-sampler abort the naive chain hit.
+//!   [`parse_expand_query_output`] + [`fallback_queryables`] stay as a lenient
+//!   recovery layer.
 
 /// The instruction string that goes into the Qwen3-Reranker user message.
 /// Pulled out as a constant so it can be tweaked centrally if/when we
@@ -41,14 +46,6 @@ pub fn build_qwen3_rerank_prompt(query: &str, document: &str) -> String {
     )
 }
 
-/// System prompt used by `expand_query`. Asks the model to emit exactly
-/// three lines of the form `lex: ...` / `vec: ...` / `hyde: ...`, with
-/// no commentary. Spike #4 confirmed this prompt + a chat-tuned model
-/// reliably produces parseable output without GBNF enforcement.
-pub const EXPAND_QUERY_SYSTEM_PROMPT: &str = "You expand search queries. Output ONLY 3 lines, each starting with one of \
-     `lex: `, `vec: `, or `hyde: ` followed by a query variation. \
-     No commentary, no other text.";
-
 /// Build the user-side message for `expand_query`. Includes the `/no_think`
 /// prefix so Qwen3 (and similar) skips the chain-of-thought block — we
 /// don't want `<think>...</think>` content interleaved with our lines.
@@ -63,6 +60,18 @@ pub fn build_expand_query_user_message(query: &str, intent: Option<&str>) -> Str
         None => format!("/no_think Expand this search query: {query}"),
     }
 }
+
+/// GBNF grammar mirroring qmd (`src/llm.ts`): force the expansion model to emit
+/// one or more `type: content` lines so the output is always parseable. The
+/// `root ::= line+` rule reaches an end-state after every completed line, so the
+/// model can stop (EOG) at a line boundary. Kept verbatim with qmd — keep in
+/// sync. Applied via `sample_token` (grammar-first), not by appending it to the
+/// sampler chain (which aborts; see [`crate::llm`] module docs).
+pub const EXPAND_QUERY_GRAMMAR: &str = r#"root ::= line+
+line ::= type ": " content "\n"
+type ::= "lex" | "vec" | "hyde"
+content ::= [^\n]+
+"#;
 
 /// Parse the raw model output from `expand_query` into structured
 /// `Queryable`s. Skips any lines that don't begin with one of the three

@@ -31,12 +31,15 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
+use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::{LlamaContextParams, LlamaPoolingType};
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::data::LlamaTokenData;
+use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::llm::backend;
@@ -512,7 +515,15 @@ impl Llm for LlamaCpp {
                 LlamaSampler::penalties(64, 1.0, 0.0, 0.5),
                 LlamaSampler::dist(1234),
             ]);
-            run_chat_decode(backend, &model, &messages, n_ctx, max_tokens, &mut sampler)
+            run_chat_decode(
+                backend,
+                &model,
+                &messages,
+                n_ctx,
+                max_tokens,
+                &mut sampler,
+                None,
+            )
         })
         .await??;
 
@@ -567,20 +578,36 @@ impl Llm for LlamaCpp {
             let backend = backend::try_get()?;
             let user_msg =
                 prompt::build_expand_query_user_message(&q_for_decode, intent.as_deref());
+            // No system message — qmd's fine-tuned model was trained on the
+            // bare `/no_think Expand ...` user turn. A system prompt pushes it
+            // out of distribution (drifts to a Chinese base-model prior on some
+            // backends), so we mirror qmd verbatim. Output is constrained with
+            // qmd's GBNF grammar, applied via `sample_token`'s grammar-first flow
+            // (NOT by appending the grammar sampler to `chain`, which aborts:
+            // top_k prunes the grammar-valid tokens, the chain then selects an
+            // invalid one, and accepting it empties the grammar stack).
             let messages = vec![
-                LlamaChatMessage::new("system".into(), prompt::EXPAND_QUERY_SYSTEM_PROMPT.into())
-                    .map_err(|e| Error::ChatTemplate(format!("system msg: {e}")))?,
                 LlamaChatMessage::new("user".into(), user_msg)
                     .map_err(|e| Error::ChatTemplate(format!("user msg: {e}")))?,
             ];
-            let mut sampler = LlamaSampler::chain_simple([
+            let mut chain = LlamaSampler::chain_simple([
                 LlamaSampler::top_k(20),
                 LlamaSampler::top_p(0.8, 1),
                 LlamaSampler::temp(0.7),
                 LlamaSampler::penalties(64, 1.0, 0.0, 0.5),
                 LlamaSampler::dist(1234),
             ]);
-            run_chat_decode(backend, &model, &messages, n_ctx, 600, &mut sampler)
+            let mut grammar = LlamaSampler::grammar(&model, prompt::EXPAND_QUERY_GRAMMAR, "root")
+                .map_err(|e| Error::Llama(format!("expand grammar init: {e}")))?;
+            run_chat_decode(
+                backend,
+                &model,
+                &messages,
+                n_ctx,
+                600,
+                &mut chain,
+                Some(&mut grammar),
+            )
         })
         .await??;
 
@@ -679,15 +706,17 @@ impl Llm for LlamaCpp {
         let model = self.ensure_embed_model().await?;
         let tokens_owned: Vec<LlamaToken> = tokens.to_vec();
         let text = tokio::task::spawn_blocking(move || -> Result<String> {
-            let mut decoder = encoding_rs::UTF_8.new_decoder();
-            let mut out = String::new();
+            // Accumulate raw bytes and decode once: per-token string decoding
+            // drops multibyte chars that span token boundaries (see the same
+            // fix in `run_chat_decode`).
+            let mut bytes: Vec<u8> = Vec::new();
             for t in tokens_owned {
                 let piece = model
-                    .token_to_piece(t, &mut decoder, false, None)
-                    .map_err(|e| Error::Tokenize(format!("token_to_piece: {e}")))?;
-                out.push_str(&piece);
+                    .token_to_piece_bytes(t, 64, false, None)
+                    .map_err(|e| Error::Tokenize(format!("token_to_piece_bytes: {e}")))?;
+                bytes.extend_from_slice(&piece);
             }
-            Ok(out)
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
         })
         .await??;
         Ok(text)
@@ -804,6 +833,61 @@ fn make_model_params() -> LlamaModelParams {
     LlamaModelParams::default().with_n_gpu_layers(n_gpu_layers)
 }
 
+/// Sample one token from `chain`. With `grammar = Some(..)`, replicate
+/// llama.cpp's `common_sampler_sample`: sample from the chain, and only if the
+/// pick violates the grammar re-sample with the grammar applied first. Every
+/// accepted token is therefore grammar-valid, so the grammar stack never
+/// empties — the failure mode behind the `GGML_ASSERT(!stacks.empty())` /
+/// "unexpected empty grammar stack" abort when a grammar sampler is naively
+/// appended to a truncating chain. EOG needs no special-casing: the grammar's
+/// `apply` permits EOG exactly at an end-state, so the probe accepts EOG only
+/// when `grammar.accept(EOG)` is safe.
+fn sample_token(
+    chain: &mut LlamaSampler,
+    grammar: Option<&mut LlamaSampler>,
+    ctx: &LlamaContext,
+    idx: i32,
+) -> Result<LlamaToken> {
+    // No grammar: preserve the prior `sample` + `accept` shape verbatim so
+    // `generate` is byte-for-byte unchanged. (`sample` already accepts
+    // internally — `llama_sampler_sample` applies *and* accepts — so this is a
+    // deliberate double-accept; harmless for this penalty config and kept only
+    // for behavioral parity with the long-standing code.)
+    let Some(grammar) = grammar else {
+        let token = chain.sample(ctx, idx);
+        chain.accept(token);
+        return Ok(token);
+    };
+
+    // 1. Candidate from the ordinary chain (top_k/top_p/temp/penalties/dist).
+    let mut data = ctx.token_data_array_ith(idx);
+    chain.apply(&mut data);
+    let candidate = data
+        .selected_token()
+        .ok_or_else(|| Error::Llama("sampler chain selected no token".into()))?;
+
+    // 2. Probe the candidate against the grammar. `apply` masks a disallowed id
+    //    to -inf and never mutates the grammar's stacks, so this is a pure check.
+    let mut probe = LlamaTokenDataArray::new(vec![LlamaTokenData::new(candidate, 1.0, 0.0)], false);
+    grammar.apply(&mut probe);
+    let token = if probe.data[0].logit().is_finite() {
+        candidate
+    } else {
+        // 3. Re-sample with the grammar applied first so the selector can only
+        //    pick a grammar-valid token.
+        let mut data = ctx.token_data_array_ith(idx);
+        grammar.apply(&mut data);
+        chain.apply(&mut data);
+        data.selected_token()
+            .ok_or_else(|| Error::Llama("grammar-constrained sampling selected no token".into()))?
+    };
+
+    // 4. `token` is always grammar-valid here, so neither accept empties the stack.
+    grammar.accept(token);
+    chain.accept(token);
+    Ok(token)
+}
+
 /// Tokenize-decode-sample loop for a chat-formatted prompt. Builds the
 /// chat template from `messages`, then walks the model token-by-token
 /// until EOG or `max_new_tokens`. Stays entirely synchronous — caller
@@ -815,6 +899,7 @@ fn run_chat_decode(
     n_ctx: usize,
     max_new_tokens: i32,
     sampler: &mut LlamaSampler,
+    mut grammar: Option<&mut LlamaSampler>,
 ) -> Result<String> {
     let template = model
         .chat_template(None)
@@ -856,23 +941,21 @@ fn run_chat_decode(
     ctx.decode(&mut batch)
         .map_err(|e| Error::Llama(format!("initial ctx.decode: {e}")))?;
 
-    let mut decoder = encoding_rs::UTF_8.new_decoder();
-    let mut output = String::new();
+    // Accumulate raw token bytes and decode the whole stream once at the end.
+    // Per-token string decoding (`token_to_piece` with a stateful UTF-8 decoder)
+    // was dropping multibyte chars (e.g. 検 in ベクトル検索) on Windows; collecting
+    // bytes and doing a single `from_utf8_lossy` reconstructs split multibyte
+    // sequences robustly regardless of how tokens split codepoints.
+    let mut output_bytes: Vec<u8> = Vec::new();
     for (n_cur, _) in (batch.n_tokens()..).zip(0..max_new_tokens) {
-        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        sampler.accept(token);
+        let token = sample_token(sampler, grammar.as_deref_mut(), &ctx, batch.n_tokens() - 1)?;
         if model.is_eog_token(token) {
             break;
         }
         let piece = model
-            .token_to_piece(
-                token,
-                &mut decoder,
-                /* special */ false,
-                /* lstrip */ None,
-            )
-            .unwrap_or_else(|_| String::from("\u{FFFD}"));
-        output.push_str(&piece);
+            .token_to_piece_bytes(token, 64, /* special */ false, /* lstrip */ None)
+            .unwrap_or_default();
+        output_bytes.extend_from_slice(&piece);
         batch.clear();
         batch
             .add(token, n_cur, &[0], true)
@@ -880,7 +963,7 @@ fn run_chat_decode(
         ctx.decode(&mut batch)
             .map_err(|e| Error::Llama(format!("loop ctx.decode: {e}")))?;
     }
-    Ok(output)
+    Ok(String::from_utf8_lossy(&output_bytes).into_owned())
 }
 
 async fn join_embed_worker_with_timeout(worker: EmbedWorker, index: usize, timeout: Duration) {
