@@ -182,5 +182,5 @@ design, search pipeline, and the query-expansion model are Tobi Lütke's work.
 Thank you.
 
 Licensed under the [MIT License](LICENSE) © 2026 Akira Ishino. The original qmd
-is also MIT-licensed © 2024–2026 Tobi Lütke; this Rust port inherits and complies
-with that license.
+is also MIT-licensed © 2024–2026 Tobi Lütke (see [`LICENSE.QMD`](LICENSE.QMD));
+this Rust port inherits and complies with that license.

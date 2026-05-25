@@ -1,6 +1,9 @@
+rqmd is a Rust port of qmd (https://github.com/tobi/qmd) and includes portions
+derived from it. qmd is distributed under the following MIT License:
+
 MIT License
 
-Copyright (c) 2026 Akira Ishino
+Copyright (c) 2024-2026 Tobi Lutke
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
