@@ -146,12 +146,27 @@ pub struct RerankDocument {
 // Model resolution / pulling
 // =============================================================================
 
-/// Override individual model URIs (otherwise env vars / defaults apply).
+/// Override individual model URIs and `expand_query` prompt/sampling knobs.
+/// Each `None` falls through to env vars / crate defaults at resolution time.
 #[derive(Debug, Clone, Default)]
 pub struct ModelResolutionConfig {
     pub embed: Option<String>,
     pub generate: Option<String>,
     pub rerank: Option<String>,
+    /// Prefix for the `expand_query` user message. `Some("")` is honoured as
+    /// an explicit empty prefix (suppresses the default `/no_think`).
+    pub expand_user_message_prefix: Option<String>,
+    /// Optional system message for `expand_query`. `Some("")` suppresses
+    /// default system prompts injected by chat templates (e.g. Llama-3).
+    pub expand_system_message: Option<String>,
+    /// HyDE template used by `fallback_queryables` when expansion yields nothing.
+    pub expand_fallback_hyde_template: Option<String>,
+    /// Sampler temperature for `expand_query`.
+    pub expand_temp: Option<f32>,
+    /// Sampler `top_k` for `expand_query`.
+    pub expand_top_k: Option<i32>,
+    /// Sampler `top_p` for `expand_query`.
+    pub expand_top_p: Option<f32>,
 }
 
 /// Options for [`crate::llm::pull::pull_models`].

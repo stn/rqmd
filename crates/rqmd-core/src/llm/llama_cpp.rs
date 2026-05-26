@@ -81,6 +81,25 @@ pub struct LlamaCppConfig {
     pub embed_parallelism: Option<usize>,
     /// Number of dedicated worker threads for the rerank pool. Default 2.
     pub rerank_parallelism: Option<usize>,
+    /// Prefix prepended to the `expand_query` user message. `None` → env →
+    /// [`config::DEFAULT_EXPAND_USER_MESSAGE_PREFIX`]. `Some("")` is an
+    /// explicit empty override (Llama Swallow / non-Qwen finetunes).
+    pub expand_user_message_prefix: Option<String>,
+    /// Optional system message for `expand_query`. `None` → env → no system
+    /// message. `Some("")` suppresses chat-template-injected defaults.
+    pub expand_system_message: Option<String>,
+    /// HyDE fallback template; `{query}` is substituted. `None` → env →
+    /// [`config::DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE`].
+    pub expand_fallback_hyde_template: Option<String>,
+    /// Sampler temperature for `expand_query`. `None` → env →
+    /// [`config::DEFAULT_EXPAND_TEMP`].
+    pub expand_temp: Option<f32>,
+    /// Sampler `top_k` for `expand_query`. `None` → env →
+    /// [`config::DEFAULT_EXPAND_TOP_K`].
+    pub expand_top_k: Option<i32>,
+    /// Sampler `top_p` for `expand_query`. `None` → env →
+    /// [`config::DEFAULT_EXPAND_TOP_P`].
+    pub expand_top_p: Option<f32>,
     /// When true, `embed_batch` / `generate` / `expand_query` / `rerank`
     /// short-circuit to [`Error::CiDisabled`] without loading any
     /// model. Tests should set this explicitly; production binaries
@@ -150,6 +169,17 @@ pub struct LlamaCpp {
     rerank_context_size: usize,
     embed_parallelism: usize,
     rerank_parallelism: usize,
+    /// Resolved at construction (env > YAML > default). See §expand_query.
+    expand_user_message_prefix: String,
+    expand_system_message: Option<String>,
+    expand_fallback_hyde_template: String,
+    expand_temp: f32,
+    expand_top_k: i32,
+    expand_top_p: f32,
+    /// Stable hash of (prefix, sysmsg, temp, top_k, top_p, hyde_template).
+    /// Empty when all knobs are at crate defaults — preserves bit-identical
+    /// `llm_cache` keys for pre-feature behaviour.
+    expand_prompt_fingerprint: String,
     ci_mode: bool,
 
     embed_model: ArcSwapOption<LlamaModel>,
@@ -178,6 +208,12 @@ impl LlamaCpp {
             embed: config.embed_model,
             generate: config.generate_model,
             rerank: config.rerank_model,
+            expand_user_message_prefix: config.expand_user_message_prefix,
+            expand_system_message: config.expand_system_message,
+            expand_fallback_hyde_template: config.expand_fallback_hyde_template,
+            expand_temp: config.expand_temp,
+            expand_top_k: config.expand_top_k,
+            expand_top_p: config.expand_top_p,
         };
         let expand_size = config::resolve_expand_context_size(config.expand_context_size)
             .unwrap_or(config::DEFAULT_EXPAND_CONTEXT_SIZE);
@@ -199,6 +235,26 @@ impl LlamaCpp {
             DEFAULT_RERANK_PARALLELISM,
         );
 
+        let expand_prefix = config::resolve_expand_user_message_prefix(
+            model_res.expand_user_message_prefix.as_deref(),
+        );
+        let expand_sysmsg =
+            config::resolve_expand_system_message(model_res.expand_system_message.as_deref());
+        let expand_hyde = config::resolve_expand_fallback_hyde_template(
+            model_res.expand_fallback_hyde_template.as_deref(),
+        );
+        let expand_temp = config::resolve_expand_temp(model_res.expand_temp);
+        let expand_top_k = config::resolve_expand_top_k(model_res.expand_top_k);
+        let expand_top_p = config::resolve_expand_top_p(model_res.expand_top_p);
+        let expand_fp = compute_expand_prompt_fingerprint(
+            &expand_prefix,
+            expand_sysmsg.as_deref(),
+            expand_temp,
+            expand_top_k,
+            expand_top_p,
+            &expand_hyde,
+        );
+
         Self {
             embed_model_uri: config::resolve_embed_model(Some(&model_res)),
             generate_model_uri: config::resolve_generate_model(Some(&model_res)),
@@ -209,6 +265,13 @@ impl LlamaCpp {
             rerank_context_size: rerank_ctx,
             embed_parallelism: embed_par,
             rerank_parallelism: rerank_par,
+            expand_user_message_prefix: expand_prefix,
+            expand_system_message: expand_sysmsg,
+            expand_fallback_hyde_template: expand_hyde,
+            expand_temp,
+            expand_top_k,
+            expand_top_p,
+            expand_prompt_fingerprint: expand_fp,
             ci_mode: config.ci_mode,
 
             embed_model: ArcSwapOption::const_empty(),
@@ -433,6 +496,10 @@ impl Llm for LlamaCpp {
         self.embed_context_size
     }
 
+    fn expand_prompt_fingerprint(&self) -> &str {
+        &self.expand_prompt_fingerprint
+    }
+
     async fn embed(&self, text: &str, opts: EmbedOptions) -> Result<Option<EmbeddingResult>> {
         // TS `embed()` does NOT check ciMode (only embedBatch / generate /
         // expandQuery / rerank do). Mirror that.
@@ -574,32 +641,59 @@ impl Llm for LlamaCpp {
         let n_ctx = self.expand_context_size;
         let q_for_decode = query_owned.clone();
 
+        // Snapshot resolved expand-query knobs onto the spawn_blocking thread.
+        // qmd's fine-tuned default model was trained on the bare `/no_think Expand ...`
+        // user turn with NO system message — a system prompt pushes it out of
+        // distribution (drifts to a Chinese base-model prior on some backends).
+        // For non-Qwen finetunes (Llama Swallow, LFM2, …) the prefix can be `""`
+        // and a system_message can be provided to override Llama-3's
+        // template-injected default. Output is constrained with qmd's GBNF
+        // grammar via `sample_token`'s grammar-first flow.
+        let prefix = self.expand_user_message_prefix.clone();
+        let system_msg = self.expand_system_message.clone();
+        let hyde_template = self.expand_fallback_hyde_template.clone();
+        let temp = self.expand_temp;
+        let top_k = self.expand_top_k;
+        let top_p = self.expand_top_p;
+
         let raw_text: String = tokio::task::spawn_blocking(move || -> Result<String> {
             let backend = backend::try_get()?;
             let user_msg =
-                prompt::build_expand_query_user_message(&q_for_decode, intent.as_deref());
-            // No system message — qmd's fine-tuned model was trained on the
-            // bare `/no_think Expand ...` user turn. A system prompt pushes it
-            // out of distribution (drifts to a Chinese base-model prior on some
-            // backends), so we mirror qmd verbatim. Output is constrained with
-            // qmd's GBNF grammar, applied via `sample_token`'s grammar-first flow
-            // (NOT by appending the grammar sampler to `chain`, which aborts:
-            // top_k prunes the grammar-valid tokens, the chain then selects an
-            // invalid one, and accepting it empties the grammar stack).
-            let messages = vec![
+                prompt::build_expand_query_user_message(&q_for_decode, intent.as_deref(), &prefix);
+            // Surface the *exact* user/system content we'll feed to the chat
+            // template, so users debugging non-Qwen finetunes (Llama Swallow,
+            // Gemma 3, …) can verify their `models.expand.*` settings took
+            // effect. Gated on `RUST_LOG=rqmd_core::llm=debug`; silent otherwise.
+            tracing::debug!(
+                target: "rqmd_core::llm::expand_query",
+                user_message = %user_msg,
+                system_message = ?system_msg,
+                temp,
+                top_k,
+                top_p,
+                "expand_query prompt resolved",
+            );
+            let mut messages = Vec::with_capacity(2);
+            if let Some(sys) = system_msg {
+                messages.push(
+                    LlamaChatMessage::new("system".into(), sys)
+                        .map_err(|e| Error::ChatTemplate(format!("system msg: {e}")))?,
+                );
+            }
+            messages.push(
                 LlamaChatMessage::new("user".into(), user_msg)
                     .map_err(|e| Error::ChatTemplate(format!("user msg: {e}")))?,
-            ];
+            );
             let mut chain = LlamaSampler::chain_simple([
-                LlamaSampler::top_k(20),
-                LlamaSampler::top_p(0.8, 1),
-                LlamaSampler::temp(0.7),
+                LlamaSampler::top_k(top_k),
+                LlamaSampler::top_p(top_p, 1),
+                LlamaSampler::temp(temp),
                 LlamaSampler::penalties(64, 1.0, 0.0, 0.5),
                 LlamaSampler::dist(1234),
             ]);
             let mut grammar = LlamaSampler::grammar(&model, prompt::EXPAND_QUERY_GRAMMAR, "root")
                 .map_err(|e| Error::Llama(format!("expand grammar init: {e}")))?;
-            run_chat_decode(
+            let out = run_chat_decode(
                 backend,
                 &model,
                 &messages,
@@ -607,14 +701,24 @@ impl Llm for LlamaCpp {
                 600,
                 &mut chain,
                 Some(&mut grammar),
-            )
+            )?;
+            tracing::debug!(
+                target: "rqmd_core::llm::expand_query",
+                raw_output = %out,
+                "expand_query raw output before parsing",
+            );
+            Ok(out)
         })
         .await??;
 
         let parsed = prompt::parse_expand_query_output(&raw_text);
         let filtered = prompt::filter_with_query_terms(&query_owned, parsed);
         if filtered.is_empty() {
-            return Ok(prompt::fallback_queryables(&query_owned, include_lexical));
+            return Ok(prompt::fallback_queryables(
+                &query_owned,
+                include_lexical,
+                &hyde_template,
+            ));
         }
         Ok(if include_lexical {
             filtered
@@ -801,6 +905,62 @@ impl Llm for LlamaCpp {
 
 const DEFAULT_EMBED_PARALLELISM: usize = 2;
 const DEFAULT_RERANK_PARALLELISM: usize = 2;
+
+/// Build a stable hash of the `expand_query` prompt + sampling configuration.
+///
+/// Returns `""` when every knob equals its crate default — that path makes
+/// the `llm_cache` key bit-identical to pre-feature behaviour so existing
+/// caches stay valid for users who never set anything.
+///
+/// Otherwise: concatenates all fields with NUL separators and hashes with
+/// SHA-256, truncated to 16 hex chars. Collision probability across a
+/// realistic config space is negligible.
+fn compute_expand_prompt_fingerprint(
+    prefix: &str,
+    sysmsg: Option<&str>,
+    temp: f32,
+    top_k: i32,
+    top_p: f32,
+    hyde_template: &str,
+) -> String {
+    let at_default = prefix == config::DEFAULT_EXPAND_USER_MESSAGE_PREFIX
+        && sysmsg.is_none()
+        && (temp - config::DEFAULT_EXPAND_TEMP).abs() < f32::EPSILON
+        && top_k == config::DEFAULT_EXPAND_TOP_K
+        && (top_p - config::DEFAULT_EXPAND_TOP_P).abs() < f32::EPSILON
+        && hyde_template == config::DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE;
+    if at_default {
+        return String::new();
+    }
+
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(prefix.as_bytes());
+    hasher.update([0]);
+    // `None` is distinct from `Some("")`: tag with a 0 / 1 byte first.
+    match sysmsg {
+        None => hasher.update([0]),
+        Some(s) => {
+            hasher.update([1]);
+            hasher.update(s.as_bytes());
+        }
+    }
+    hasher.update([0]);
+    hasher.update(temp.to_le_bytes());
+    hasher.update(top_k.to_le_bytes());
+    hasher.update(top_p.to_le_bytes());
+    hasher.update([0]);
+    hasher.update(hyde_template.as_bytes());
+    let digest = hasher.finalize();
+    // 8 bytes → 16 hex chars
+    digest[..8]
+        .iter()
+        .fold(String::with_capacity(16), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
 
 fn resolve_pool_parallelism(config_value: Option<usize>, env_var: &str, default: usize) -> usize {
     if let Some(n) = config_value {
@@ -1088,5 +1248,147 @@ mod tests {
         ];
         let out = flatten_with_chunk_fallback(raw, &[2, 1, 1]);
         assert_eq!(out, vec![Some(0.9), Some(0.1), None, Some(0.5)]);
+    }
+
+    // -------------------------------------------------------------------
+    // expand_prompt_fingerprint — cache-key safety net
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn expand_fingerprint_empty_when_all_defaults() {
+        // The whole point: pre-feature `llm_cache` keys must keep working
+        // for users who never touch `models.expand`.
+        assert_eq!(
+            compute_expand_prompt_fingerprint(
+                config::DEFAULT_EXPAND_USER_MESSAGE_PREFIX,
+                None,
+                config::DEFAULT_EXPAND_TEMP,
+                config::DEFAULT_EXPAND_TOP_K,
+                config::DEFAULT_EXPAND_TOP_P,
+                config::DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE,
+            ),
+            "",
+        );
+    }
+
+    #[test]
+    fn expand_fingerprint_nonempty_when_prefix_changes() {
+        let fp = compute_expand_prompt_fingerprint(
+            "",
+            None,
+            config::DEFAULT_EXPAND_TEMP,
+            config::DEFAULT_EXPAND_TOP_K,
+            config::DEFAULT_EXPAND_TOP_P,
+            config::DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE,
+        );
+        assert!(
+            !fp.is_empty(),
+            "non-default prefix must produce a fingerprint"
+        );
+        assert_eq!(fp.len(), 16, "fingerprint truncated to 16 hex chars");
+    }
+
+    #[test]
+    fn expand_fingerprint_distinguishes_none_from_empty_system_message() {
+        // `None` and `Some("")` are semantically different for system_message
+        // (the former lets the chat template inject its default; the latter
+        // suppresses it). They must hash differently.
+        let fp_none = compute_expand_prompt_fingerprint(
+            "",
+            None,
+            config::DEFAULT_EXPAND_TEMP,
+            config::DEFAULT_EXPAND_TOP_K,
+            config::DEFAULT_EXPAND_TOP_P,
+            config::DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE,
+        );
+        let fp_empty = compute_expand_prompt_fingerprint(
+            "",
+            Some(""),
+            config::DEFAULT_EXPAND_TEMP,
+            config::DEFAULT_EXPAND_TOP_K,
+            config::DEFAULT_EXPAND_TOP_P,
+            config::DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE,
+        );
+        assert_ne!(fp_none, fp_empty);
+    }
+
+    #[test]
+    fn expand_fingerprint_stable_for_same_inputs() {
+        let make = || {
+            compute_expand_prompt_fingerprint("", Some("sys"), 0.5, 40, 0.95, "{query}に関する情報")
+        };
+        assert_eq!(make(), make(), "same inputs must produce same fingerprint");
+    }
+
+    #[test]
+    fn expand_fingerprint_each_field_affects_hash() {
+        let base = compute_expand_prompt_fingerprint(
+            "",
+            Some("sys"),
+            0.5,
+            40,
+            0.95,
+            "{query}に関する情報",
+        );
+        // Vary each field one at a time; every variant must produce a
+        // different fingerprint so the cache key invalidates correctly.
+        let prefix_changed = compute_expand_prompt_fingerprint(
+            "X",
+            Some("sys"),
+            0.5,
+            40,
+            0.95,
+            "{query}に関する情報",
+        );
+        let sys_changed = compute_expand_prompt_fingerprint(
+            "",
+            Some("other"),
+            0.5,
+            40,
+            0.95,
+            "{query}に関する情報",
+        );
+        let temp_changed = compute_expand_prompt_fingerprint(
+            "",
+            Some("sys"),
+            0.6,
+            40,
+            0.95,
+            "{query}に関する情報",
+        );
+        let top_k_changed = compute_expand_prompt_fingerprint(
+            "",
+            Some("sys"),
+            0.5,
+            41,
+            0.95,
+            "{query}に関する情報",
+        );
+        let top_p_changed = compute_expand_prompt_fingerprint(
+            "",
+            Some("sys"),
+            0.5,
+            40,
+            0.96,
+            "{query}に関する情報",
+        );
+        let hyde_changed = compute_expand_prompt_fingerprint(
+            "",
+            Some("sys"),
+            0.5,
+            40,
+            0.95,
+            "Information about {query}",
+        );
+        for (name, other) in [
+            ("prefix", &prefix_changed),
+            ("sys", &sys_changed),
+            ("temp", &temp_changed),
+            ("top_k", &top_k_changed),
+            ("top_p", &top_p_changed),
+            ("hyde", &hyde_changed),
+        ] {
+            assert_ne!(&base, other, "{name} change must affect fingerprint");
+        }
     }
 }

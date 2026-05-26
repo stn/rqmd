@@ -710,10 +710,18 @@ impl RqmdStore {
 fn config_models(cfg: Option<&Config>) -> ModelResolutionConfig {
     cfg.map(|c| {
         let m = c.data().models.as_ref();
+        let expand = m.and_then(|m| m.expand.as_ref());
+        let sampling = expand.and_then(|e| e.sampling.as_ref());
         ModelResolutionConfig {
             embed: m.and_then(|m| m.embed.clone()),
             generate: m.and_then(|m| m.generate.clone()),
             rerank: m.and_then(|m| m.rerank.clone()),
+            expand_user_message_prefix: expand.and_then(|e| e.user_message_prefix.clone()),
+            expand_system_message: expand.and_then(|e| e.system_message.clone()),
+            expand_fallback_hyde_template: expand.and_then(|e| e.fallback_hyde_template.clone()),
+            expand_temp: sampling.and_then(|s| s.temp),
+            expand_top_k: sampling.and_then(|s| s.top_k),
+            expand_top_p: sampling.and_then(|s| s.top_p),
         }
     })
     .unwrap_or_default()

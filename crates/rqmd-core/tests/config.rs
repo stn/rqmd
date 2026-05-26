@@ -245,6 +245,7 @@ fn constructor_resolves_model_uris_via_the_same_resolver() {
                     embed: Some("hf:config/embed/file.gguf".into()),
                     generate: Some("hf:config/generate/file.gguf".into()),
                     rerank: Some("hf:config/rerank/file.gguf".into()),
+                    ..Default::default()
                 };
                 assert_eq!(llm.embed_model_uri(), resolve_embed_model(Some(&res)));
                 assert_eq!(llm.generate_model_uri(), resolve_generate_model(Some(&res)));

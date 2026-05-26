@@ -58,12 +58,19 @@ pub fn run(p: &Palette) -> Result<()> {
         embed: cfg.data().models.as_ref().and_then(|m| m.embed.clone()),
         generate: cfg.data().models.as_ref().and_then(|m| m.generate.clone()),
         rerank: cfg.data().models.as_ref().and_then(|m| m.rerank.clone()),
+        // `resolve_models` only inspects the three URI fields, so leave the
+        // expand-prompt knobs at their defaults here — they're not URIs.
+        ..Default::default()
     };
     let resolved = resolve_models(Some(&existing));
+    // Preserve any user-supplied `expand:` block verbatim on rewrite. `init`
+    // only canonicalises model URIs; it doesn't generate `expand` defaults.
+    let preserved_expand = cfg.data().models.as_ref().and_then(|m| m.expand.clone());
     cfg.set_models(ModelsConfig {
         embed: Some(resolved.embed),
         rerank: Some(resolved.rerank),
         generate: Some(resolved.generate),
+        expand: preserved_expand,
     })
     .with_context(|| format!("writing config at {}", config_path.display()))?;
 

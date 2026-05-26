@@ -222,3 +222,86 @@ fn loads_empty_or_missing_file_as_default() {
     // file = empty config", which the previous assert covers.
     let _ = ContextMap::new(); // keep the import alive
 }
+
+// =============================================================================
+// `models.expand` round-trip — added in the Llama-Swallow plan.
+// =============================================================================
+
+#[test]
+fn expand_section_round_trips_with_all_fields() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("index.yml");
+    write(
+        &path,
+        r#"
+models:
+  generate: hf:test/model.gguf
+  expand:
+    user_message_prefix: ""
+    system_message: "あなたは検索クエリ拡張アシスタントです。"
+    sampling:
+      temp: 0.6
+      top_k: 30
+      top_p: 0.9
+    fallback_hyde_template: "{query}に関する情報"
+"#,
+    );
+
+    let config = Config::from_file(&path).unwrap();
+    let models = config.data().models.as_ref().unwrap();
+    let expand = models.expand.as_ref().unwrap();
+    assert_eq!(expand.user_message_prefix.as_deref(), Some(""));
+    assert_eq!(
+        expand.system_message.as_deref(),
+        Some("あなたは検索クエリ拡張アシスタントです。"),
+    );
+    assert_eq!(
+        expand.fallback_hyde_template.as_deref(),
+        Some("{query}に関する情報"),
+    );
+    let s = expand.sampling.as_ref().unwrap();
+    assert_eq!(s.temp, Some(0.6));
+    assert_eq!(s.top_k, Some(30));
+    assert_eq!(s.top_p, Some(0.9));
+}
+
+#[test]
+fn expand_user_message_prefix_empty_string_round_trips() {
+    // Critical: serde must serialize the explicit `""` (not skip it as if it
+    // were None), and deserialize it back to `Some("")`. Otherwise a Llama
+    // Swallow user's `user_message_prefix: ""` setting would silently
+    // disappear on save.
+    use rqmd_core::ExpandPromptConfig;
+
+    let cfg = ExpandPromptConfig {
+        user_message_prefix: Some(String::new()),
+        ..Default::default()
+    };
+    let yaml = serde_norway::to_string(&cfg).unwrap();
+    assert!(
+        yaml.contains("user_message_prefix:"),
+        "explicit empty must serialize, got: {yaml}",
+    );
+    let reloaded: ExpandPromptConfig = serde_norway::from_str(&yaml).unwrap();
+    assert_eq!(reloaded.user_message_prefix.as_deref(), Some(""));
+}
+
+#[test]
+fn expand_absent_when_not_configured() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("index.yml");
+    write(
+        &path,
+        r#"
+models:
+  generate: hf:test/model.gguf
+"#,
+    );
+
+    let config = Config::from_file(&path).unwrap();
+    let models = config.data().models.as_ref().unwrap();
+    assert!(
+        models.expand.is_none(),
+        "expand section should be absent when not in YAML",
+    );
+}
