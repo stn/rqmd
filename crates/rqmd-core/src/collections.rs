@@ -23,7 +23,7 @@ use crate::paths;
 /// The complete configuration document.
 ///
 /// Mirrors `CollectionConfig` in `collections.ts`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConfigData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_context: Option<String>,
@@ -79,7 +79,7 @@ impl Collection {
 }
 
 /// Model bindings — optional GGUF model names for the LLM stack.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ModelsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed: Option<String>,
@@ -89,6 +89,59 @@ pub struct ModelsConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate: Option<String>,
+
+    /// Per-index overrides for `expand_query` prompt shape and sampling.
+    /// Allows non-Qwen3 finetunes (e.g. Llama Swallow) to skip `/no_think`
+    /// and provide a custom system message. All fields optional; unset =
+    /// crate default = qmd parity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expand: Option<ExpandPromptConfig>,
+}
+
+/// Prompt shape + sampling overrides for `expand_query`.
+///
+/// `Eq` cannot be derived because `ExpandSamplingConfig` contains `f32`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ExpandPromptConfig {
+    /// Prepended to the user message. Default `"/no_think"` (Qwen3 control
+    /// token). Non-Qwen3 finetunes should set this to `""`. A separator
+    /// space is auto-inserted by [`crate::llm::prompt::build_expand_query_user_message`]
+    /// when the prefix is non-empty and does not already end with whitespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_message_prefix: Option<String>,
+
+    /// Optional system message inserted before the user turn. Default `None`
+    /// (no system message — matches qmd's Qwen3 finetune training data).
+    /// Llama-3 and similar templates auto-inject a default system prompt when
+    /// none is provided; setting this to `""` or a short instruction
+    /// suppresses that default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+
+    /// Sampling hyperparameters. Default values mirror qmd's hardcoded
+    /// Qwen3-1.7B tuning (`temp=0.7, top_k=20, top_p=0.8`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<ExpandSamplingConfig>,
+
+    /// HyDE template used by [`crate::llm::prompt::fallback_queryables`].
+    /// `{query}` is substituted with the original query. Default
+    /// `"Information about {query}"`. For non-English queries set this to a
+    /// localized template (e.g. `"{query}に関する情報"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_hyde_template: Option<String>,
+}
+
+/// Per-call sampler tuning for `expand_query`. `Eq` not derivable due to `f32`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ExpandSamplingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temp: Option<f32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
 }
 
 /// Per-path contexts inside a collection. The key is a path prefix

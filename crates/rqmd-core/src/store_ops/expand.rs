@@ -84,7 +84,12 @@ pub async fn expand_query(
     // (`intent ?` / `intent &&`). This is the single point that also covers SDK
     // callers of this public fn (e.g. `RqmdStore::expand_query`).
     let intent = intent.filter(|i| !i.is_empty());
-    let cache_key = expand_query_cache_key(query, model, intent);
+    // Fold the LLM's resolved (prefix, system_message, sampling, hyde) into
+    // the cache key so swapping any of them invalidates stale expansions.
+    // Empty string when all knobs are at crate defaults → bit-identical key
+    // to pre-feature rqmd and to upstream qmd.
+    let fingerprint = llm.expand_prompt_fingerprint();
+    let cache_key = expand_query_cache_key(query, model, intent, fingerprint);
 
     // Cache lookup. Two formats accepted; one written.
     let cached = store.with_connection(|c| get_cached_result(c, &cache_key))?;

@@ -70,8 +70,9 @@ pub mod store_ops;
 
 pub use collections::{
     Collection, CollectionSettings, Config, ConfigData, ContextEntry, ContextMap, Error,
-    IncludeByDefaultField, ModelsConfig, NamedCollectionRef, Result, UpdateField,
-    find_local_config_path, is_valid_collection_name, local_db_path,
+    ExpandPromptConfig, ExpandSamplingConfig, IncludeByDefaultField, ModelsConfig,
+    NamedCollectionRef, Result, UpdateField, find_local_config_path, is_valid_collection_name,
+    local_db_path,
 };
 // Note: the crate-root `Error`/`Result` continue to be the
 // `collections::*` ones (matching the existing public API). The

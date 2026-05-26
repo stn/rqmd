@@ -43,7 +43,7 @@ fn rerank_prompt_includes_all_required_landmarks() {
 
 #[test]
 fn expand_query_user_message_without_intent() {
-    let msg = build_expand_query_user_message("rust async runtime", None);
+    let msg = build_expand_query_user_message("rust async runtime", None, "/no_think");
     assert_eq!(
         msg,
         "/no_think Expand this search query: rust async runtime"
@@ -52,7 +52,11 @@ fn expand_query_user_message_without_intent() {
 
 #[test]
 fn expand_query_user_message_with_intent() {
-    let msg = build_expand_query_user_message("rust async runtime", Some("performance comparison"));
+    let msg = build_expand_query_user_message(
+        "rust async runtime",
+        Some("performance comparison"),
+        "/no_think",
+    );
     assert_eq!(
         msg,
         "/no_think Expand this search query: rust async runtime\nQuery intent: performance comparison"
@@ -145,7 +149,7 @@ fn filter_with_query_terms_passes_everything_when_query_is_empty() {
 
 #[test]
 fn fallback_includes_hyde_lex_vec_when_lexical_enabled() {
-    let fallback = fallback_queryables("hello world", true);
+    let fallback = fallback_queryables("hello world", true, "Information about {query}");
     let types: Vec<_> = fallback.iter().map(|q| q.type_).collect();
     assert_eq!(types, vec![QueryType::Hyde, QueryType::Lex, QueryType::Vec]);
     assert_eq!(fallback[0].text, "Information about hello world");
@@ -155,7 +159,7 @@ fn fallback_includes_hyde_lex_vec_when_lexical_enabled() {
 
 #[test]
 fn fallback_drops_lex_when_lexical_disabled() {
-    let fallback = fallback_queryables("hello world", false);
+    let fallback = fallback_queryables("hello world", false, "Information about {query}");
     let types: Vec<_> = fallback.iter().map(|q| q.type_).collect();
     assert_eq!(types, vec![QueryType::Hyde, QueryType::Vec]);
 }

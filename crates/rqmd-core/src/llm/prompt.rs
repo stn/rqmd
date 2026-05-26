@@ -46,18 +46,41 @@ pub fn build_qwen3_rerank_prompt(query: &str, document: &str) -> String {
     )
 }
 
-/// Build the user-side message for `expand_query`. Includes the `/no_think`
-/// prefix so Qwen3 (and similar) skips the chain-of-thought block — we
-/// don't want `<think>...</think>` content interleaved with our lines.
+/// Build the user-side message for `expand_query`.
+///
+/// `prefix` is caller-provided (typically resolved by
+/// [`crate::llm::config::resolve_expand_user_message_prefix`]). The crate
+/// default is `/no_think` (Qwen3 chain-of-thought suppression). A separator
+/// space is auto-inserted iff `prefix` is non-empty and does not already end
+/// with whitespace — callers do not need to remember a trailing space.
 ///
 /// The optional `intent` mirrors `expandQuery(..., { intent })` in TS
 /// (lines 1309–1312): an extra hint about *why* the user is searching.
-pub fn build_expand_query_user_message(query: &str, intent: Option<&str>) -> String {
+///
+/// # qmd parity divergence — do not revert
+///
+/// Upstream qmd `src/llm.ts:1449-1451` hardcodes `/no_think` unconditionally,
+/// which only works for Qwen3-based finetunes. qmd itself recognises this
+/// limitation in `finetune/dataset/prepare_data_lfm2.py:10`
+/// (`"No /no_think needed (that's Qwen3-specific)."`). This function's
+/// `prefix` argument exists so non-Qwen finetunes (Llama Swallow, LFM2, …)
+/// can pass `""` and get a clean user message. Future maintainers: do not
+/// "fix" this by hardcoding the prefix back in the name of qmd parity.
+///
+/// The `EXPAND_QUERY_GRAMMAR` (see below) constrains *output* to the
+/// `lex|vec|hyde: ...` line schema for every model, so finetunes are expected
+/// to emit qmd-compatible output regardless of the prefix choice.
+pub fn build_expand_query_user_message(query: &str, intent: Option<&str>, prefix: &str) -> String {
+    let sep = match prefix.chars().last() {
+        None => "",                         // empty prefix
+        Some(c) if c.is_whitespace() => "", // already separated
+        Some(_) => " ",                     // needs separator
+    };
     match intent {
         Some(intent) => {
-            format!("/no_think Expand this search query: {query}\nQuery intent: {intent}")
+            format!("{prefix}{sep}Expand this search query: {query}\nQuery intent: {intent}")
         }
-        None => format!("/no_think Expand this search query: {query}"),
+        None => format!("{prefix}{sep}Expand this search query: {query}"),
     }
 }
 
@@ -139,14 +162,30 @@ pub fn filter_with_query_terms(
 
 /// Build the fallback `Queryable` list when expansion produces nothing
 /// usable. Mirrors TS lines 1362–1373.
+///
+/// `hyde_template` is caller-provided (typically resolved by
+/// [`crate::llm::config::resolve_expand_fallback_hyde_template`]); the crate
+/// default is `"Information about {query}"`. `{query}` is substituted with
+/// the original query via plain `str::replace`. If the template contains no
+/// `{query}` placeholder the template is used verbatim (intentional — not a
+/// bug).
+///
+/// # qmd parity divergence — do not revert
+///
+/// Upstream qmd `src/llm.ts:1502-1504` hardcodes the English "Information
+/// about" template. Making it configurable here lets non-English (e.g.
+/// Japanese) deployments produce coherent fallback text. Future maintainers:
+/// do not hardcode this back.
 pub fn fallback_queryables(
     query: &str,
     include_lexical: bool,
+    hyde_template: &str,
 ) -> Vec<crate::llm::types::Queryable> {
+    let hyde_text = hyde_template.replace("{query}", query);
     let mut out = vec![
         crate::llm::types::Queryable {
             type_: crate::llm::types::QueryType::Hyde,
-            text: format!("Information about {query}"),
+            text: hyde_text,
         },
         crate::llm::types::Queryable {
             type_: crate::llm::types::QueryType::Lex,
@@ -161,4 +200,120 @@ pub fn fallback_queryables(
         out.retain(|q| q.type_ != crate::llm::types::QueryType::Lex);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::types::QueryType;
+
+    // -------------------------------------------------------------------
+    // build_expand_query_user_message — separator auto-insertion
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn user_message_default_prefix_auto_inserts_space() {
+        assert_eq!(
+            build_expand_query_user_message("foo", None, "/no_think"),
+            "/no_think Expand this search query: foo",
+        );
+    }
+
+    #[test]
+    fn user_message_prefix_with_trailing_space_is_idempotent() {
+        // Pre-feature behaviour passed a literal `"/no_think "` (trailing
+        // space) — the new auto-separator must not double-space.
+        assert_eq!(
+            build_expand_query_user_message("foo", None, "/no_think "),
+            "/no_think Expand this search query: foo",
+        );
+    }
+
+    #[test]
+    fn user_message_prefix_ending_in_newline_skips_separator() {
+        assert_eq!(
+            build_expand_query_user_message("foo", None, "/no_think\n"),
+            "/no_think\nExpand this search query: foo",
+        );
+    }
+
+    #[test]
+    fn user_message_prefix_ending_in_tab_skips_separator() {
+        // Locks down `char::is_whitespace` semantics — tab counts.
+        assert_eq!(
+            build_expand_query_user_message("foo", None, "/no_think\t"),
+            "/no_think\tExpand this search query: foo",
+        );
+    }
+
+    #[test]
+    fn user_message_empty_prefix_emits_bare_body() {
+        // Llama Swallow / non-Qwen path: prefix `""` produces a clean message
+        // with no leading space.
+        assert_eq!(
+            build_expand_query_user_message("foo", None, ""),
+            "Expand this search query: foo",
+        );
+    }
+
+    #[test]
+    fn user_message_prefix_ending_in_colon_gets_separator() {
+        // Non-whitespace, non-empty trailing char → insert space.
+        assert_eq!(
+            build_expand_query_user_message("foo", None, "### Task:"),
+            "### Task: Expand this search query: foo",
+        );
+    }
+
+    #[test]
+    fn user_message_with_intent_appends_intent_line() {
+        assert_eq!(
+            build_expand_query_user_message("foo", Some("research"), "/no_think"),
+            "/no_think Expand this search query: foo\nQuery intent: research",
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // fallback_queryables — {query} placeholder substitution
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn fallback_default_template_matches_pre_feature_behaviour() {
+        let out = fallback_queryables("日本の首都", true, "Information about {query}");
+        let hyde = out.iter().find(|q| q.type_ == QueryType::Hyde).unwrap();
+        assert_eq!(hyde.text, "Information about 日本の首都");
+        // Lex + Vec slots are the raw query.
+        assert!(
+            out.iter()
+                .any(|q| q.type_ == QueryType::Lex && q.text == "日本の首都")
+        );
+        assert!(
+            out.iter()
+                .any(|q| q.type_ == QueryType::Vec && q.text == "日本の首都")
+        );
+    }
+
+    #[test]
+    fn fallback_japanese_template_produces_coherent_text() {
+        let out = fallback_queryables("日本の首都", true, "{query}に関する情報");
+        let hyde = out.iter().find(|q| q.type_ == QueryType::Hyde).unwrap();
+        assert_eq!(hyde.text, "日本の首都に関する情報");
+    }
+
+    #[test]
+    fn fallback_excludes_lex_when_not_requested() {
+        let out = fallback_queryables("日本の首都", false, "Information about {query}");
+        assert!(out.iter().all(|q| q.type_ != QueryType::Lex));
+        assert!(out.iter().any(|q| q.type_ == QueryType::Hyde));
+        assert!(out.iter().any(|q| q.type_ == QueryType::Vec));
+    }
+
+    #[test]
+    fn fallback_template_without_placeholder_used_verbatim() {
+        // Intentional spec: missing `{query}` is not an error; the template
+        // is used as-is. This is documented in the doc-comment.
+        let out = fallback_queryables("foo", true, "no placeholder here");
+        let hyde = out.iter().find(|q| q.type_ == QueryType::Hyde).unwrap();
+        assert_eq!(hyde.text, "no placeholder here");
+    }
 }

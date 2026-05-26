@@ -100,6 +100,19 @@ pub trait Llm: Send + Sync {
         usize::MAX
     }
 
+    /// Stable identifier for the resolved `expand_query` prompt shape and
+    /// sampling. Folded into the `llm_cache` key so that flipping
+    /// `user_message_prefix`, `system_message`, sampling, or the HyDE
+    /// fallback template invalidates stale cached expansions.
+    ///
+    /// Returns `""` when all knobs are at crate defaults — keeps cache keys
+    /// bit-identical to pre-feature behaviour. Production impl
+    /// ([`crate::llm::llama_cpp::LlamaCpp`]) hashes the non-default subset.
+    /// Mocks / fakes can inherit this no-op.
+    fn expand_prompt_fingerprint(&self) -> &str {
+        ""
+    }
+
     /// Tear down workers and release native resources. Idempotent.
     /// In-flight operations are given up to ~30s to drain before
     /// dispose proceeds (see [`crate::llm::llama_cpp::LlamaCpp::dispose`]).

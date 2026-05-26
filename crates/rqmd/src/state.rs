@@ -141,10 +141,19 @@ impl IndexState {
     /// defaults happens inside [`LlamaCpp::new`].
     fn models_config(&self) -> Result<ModelResolutionConfig> {
         let data = self.config()?.data();
+        let m = data.models.as_ref();
+        let expand = m.and_then(|m| m.expand.as_ref());
+        let sampling = expand.and_then(|e| e.sampling.as_ref());
         Ok(ModelResolutionConfig {
-            embed: data.models.as_ref().and_then(|m| m.embed.clone()),
-            generate: data.models.as_ref().and_then(|m| m.generate.clone()),
-            rerank: data.models.as_ref().and_then(|m| m.rerank.clone()),
+            embed: m.and_then(|m| m.embed.clone()),
+            generate: m.and_then(|m| m.generate.clone()),
+            rerank: m.and_then(|m| m.rerank.clone()),
+            expand_user_message_prefix: expand.and_then(|e| e.user_message_prefix.clone()),
+            expand_system_message: expand.and_then(|e| e.system_message.clone()),
+            expand_fallback_hyde_template: expand.and_then(|e| e.fallback_hyde_template.clone()),
+            expand_temp: sampling.and_then(|s| s.temp),
+            expand_top_k: sampling.and_then(|s| s.top_k),
+            expand_top_p: sampling.and_then(|s| s.top_p),
         })
     }
 
@@ -169,6 +178,12 @@ impl IndexState {
                 embed_model: model_cfg.embed,
                 generate_model: model_cfg.generate,
                 rerank_model: model_cfg.rerank,
+                expand_user_message_prefix: model_cfg.expand_user_message_prefix,
+                expand_system_message: model_cfg.expand_system_message,
+                expand_fallback_hyde_template: model_cfg.expand_fallback_hyde_template,
+                expand_temp: model_cfg.expand_temp,
+                expand_top_k: model_cfg.expand_top_k,
+                expand_top_p: model_cfg.expand_top_p,
                 ..LlamaCppConfig::from_env()
             };
             self.llama = Some(Arc::new(LlamaCpp::new(llama)));
