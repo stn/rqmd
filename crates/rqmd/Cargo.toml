@@ -36,6 +36,11 @@ tokio      = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 # lifecycle (Windows has no fork/SIGTERM; sysinfo abstracts OpenProcess/
 # TerminateProcess vs libc::kill). Only the `system` feature is needed.
 sysinfo    = { version = "0.39", default-features = false, features = ["system"] }
+# rqmd-core emits `tracing` events (e.g. invalid env-var warnings, expand_query
+# prompt-debug logs). The CLI installs a fmt subscriber gated on `RUST_LOG` so
+# those events become visible on stderr when the user opts in (default: silent).
+tracing    = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(windows)'.dependencies]
 # `mcp --daemon` re-spawns a detached server. On Windows, CreateProcess with

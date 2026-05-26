@@ -29,8 +29,25 @@ async fn main() {
     }
 }
 
+/// Install a `tracing` subscriber gated on `RUST_LOG`. When the env var is
+/// unset the subscriber drops all events (default off — keeps the CLI quiet
+/// for end users). Setting `RUST_LOG=rqmd_core::llm=debug` (for example)
+/// surfaces the `expand_query` prompt-debug logs and the invalid-env-var
+/// warnings on stderr. Failures are non-fatal — a duplicate-init or missing
+/// env merely means logging stays at the previous (or default) level.
+fn init_tracing() {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("off"));
+    let _ = fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .try_init();
+}
+
 async fn run() -> Result<()> {
     let args = Cli::parse();
+
+    init_tracing();
 
     // Flip to production mode so default_db_path() returns a real path
     // instead of the test-only DbPathNotSet error.
