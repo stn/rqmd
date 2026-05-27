@@ -369,7 +369,7 @@ pub async fn generate_embeddings(
     if embed_ctx < CHUNK_SIZE_TOKENS {
         tracing::warn!(
             "embed_context_size ({}) < CHUNK_SIZE_TOKENS ({}); large chunks will hit the \
-             encoder assertion or be rejected. Set QMD_EMBED_CONTEXT_SIZE to at least {}.",
+             encoder assertion or be rejected. Set RQMD_EMBED_CONTEXT_SIZE to at least {}.",
             embed_ctx,
             CHUNK_SIZE_TOKENS,
             CHUNK_SIZE_TOKENS,

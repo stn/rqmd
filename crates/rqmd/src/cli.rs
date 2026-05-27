@@ -18,8 +18,8 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "NAME")]
     pub index: Option<String>,
 
-    /// Force CPU mode for llama.cpp operations (sets QMD_FORCE_CPU=1). Harmless
-    /// for non-LLM subcommands but accepted for forward-compat with qmd.
+    /// Force CPU mode for llama.cpp operations (sets RQMD_FORCE_CPU=1). Harmless
+    /// for non-LLM subcommands.
     #[arg(long, global = true)]
     pub no_gpu: bool,
 

@@ -1,11 +1,8 @@
 //! GPU mode and parallelism resolution.
 //!
-//! `tobi/qmd/src/llm.ts` lines 516–568 let you pick the llama.cpp GPU
-//! backend at runtime via `QMD_LLAMA_GPU=metal|vulkan|cuda|false` (with
-//! `QMD_FORCE_CPU` as an override). `llama-cpp-2` does NOT support
-//! runtime backend selection — the backend is decided by Cargo features
-//! at build time. The Rust port therefore collapses the TS five-state
-//! enum to a two-state `Auto | Off`:
+//! `llama-cpp-2` does NOT support runtime backend selection — the backend
+//! is decided by Cargo features at build time. So the runtime knob is a
+//! two-state `Auto | Off`:
 //!
 //! * `Off` means "force `n_gpu_layers = 0`" (CPU-only inference, even
 //!   when a GPU backend is compiled in).
@@ -13,14 +10,18 @@
 //!   features `metal` / `cuda` / `vulkan` on the `rqmd-core` crate
 //!   (also re-exported by the `rqmd` CLI).
 //!
-//! For input compatibility with qmd we still accept the original env
-//! values; "metal" / "vulkan" / "cuda" emit a warning explaining the
-//! runtime-switching limitation and fall back to `Auto`. Everyone parses
-//! "false" / "off" / "none" / "disable" / "disabled" / "0" the same way.
+//! `RQMD_FORCE_CPU` (set to anything other than `false`/`off`/`none`/`0`)
+//! forces `Off`. Otherwise `RQMD_LLAMA_GPU` is consulted: unset / empty /
+//! `auto` → `Auto`; any off-string → `Off`; the legacy backend names
+//! `metal` / `vulkan` / `cuda` map to `Auto` with a warning explaining
+//! the compile-time-only restriction; anything else → `Auto` with a
+//! stronger warning about the invalid value.
 
 use std::env;
 
-// Strings that mean "off" for both QMD_FORCE_CPU and QMD_LLAMA_GPU.
+use crate::env_keys;
+
+// Strings that mean "off" for both RQMD_FORCE_CPU and RQMD_LLAMA_GPU.
 const OFF_VALUES: &[&str] = &["false", "off", "none", "disable", "disabled", "0"];
 const KNOWN_BACKEND_VALUES: &[&str] = &["metal", "vulkan", "cuda"];
 
@@ -36,14 +37,14 @@ pub enum LlamaGpuMode {
     Off,
 }
 
-/// Resolve [`LlamaGpuMode`] from the qmd-compatible env vars.
+/// Resolve [`LlamaGpuMode`] from the rqmd env vars.
 ///
-/// `QMD_FORCE_CPU` wins when set to anything OTHER than an off-string
+/// `RQMD_FORCE_CPU` wins when set to anything OTHER than an off-string
 /// (i.e. "1", "true", "yes", "force" all mean "force CPU"); when set to
 /// an off-string it is treated as unset so the explicit "off" semantics
-/// match the TS source.
+/// behave intuitively.
 ///
-/// Then `QMD_LLAMA_GPU` is consulted: unset / empty / "auto" → `Auto`;
+/// Then `RQMD_LLAMA_GPU` is consulted: unset / empty / "auto" → `Auto`;
 /// any off-string → `Off`; "metal" / "vulkan" / "cuda" → `Auto` with a
 /// warning; anything else → `Auto` with a stronger warning about the
 /// invalid value.
@@ -68,7 +69,7 @@ pub fn resolve_llama_gpu_mode(gpu_env: Option<&str>, force_cpu_env: Option<&str>
     }
     if KNOWN_BACKEND_VALUES.contains(&normalized.as_str()) {
         tracing::warn!(
-            "QMD_LLAMA_GPU=\"{raw}\" requests runtime backend selection, but llama-cpp-2 \
+            "RQMD_LLAMA_GPU=\"{raw}\" requests runtime backend selection, but llama-cpp-2 \
              chooses backends at compile time. Rebuild with `cargo --features \
              rqmd-core/{backend}` instead. Treating this as `auto`.",
             raw = raw,
@@ -77,7 +78,7 @@ pub fn resolve_llama_gpu_mode(gpu_env: Option<&str>, force_cpu_env: Option<&str>
         return LlamaGpuMode::Auto;
     }
     tracing::warn!(
-        "invalid QMD_LLAMA_GPU=\"{raw}\"; falling back to auto",
+        "invalid RQMD_LLAMA_GPU=\"{raw}\"; falling back to auto",
         raw = raw,
     );
     LlamaGpuMode::Auto
@@ -85,8 +86,8 @@ pub fn resolve_llama_gpu_mode(gpu_env: Option<&str>, force_cpu_env: Option<&str>
 
 /// Convenience wrapper that reads the env directly.
 pub fn resolve_llama_gpu_mode_from_env() -> LlamaGpuMode {
-    let gpu = env::var("QMD_LLAMA_GPU").ok();
-    let force = env::var("QMD_FORCE_CPU").ok();
+    let gpu = env::var(env_keys::LLAMA_GPU).ok();
+    let force = env::var(env_keys::FORCE_CPU).ok();
     resolve_llama_gpu_mode(gpu.as_deref(), force.as_deref())
 }
 
@@ -94,7 +95,7 @@ pub fn resolve_llama_gpu_mode_from_env() -> LlamaGpuMode {
 // Parallelism
 // =============================================================================
 
-/// Parse `QMD_EMBED_PARALLELISM`. Returns `None` for unset / empty /
+/// Parse `RQMD_EMBED_PARALLELISM`. Returns `None` for unset / empty /
 /// invalid; clamps valid values to `[1, 8]`.
 pub fn resolve_parallelism_override(env_value: Option<&str>) -> Option<usize> {
     let raw = env_value?;
@@ -106,7 +107,7 @@ pub fn resolve_parallelism_override(env_value: Option<&str>) -> Option<usize> {
         Ok(n) if n >= 1 => Some(n.min(8)),
         _ => {
             tracing::warn!(
-                "invalid QMD_EMBED_PARALLELISM=\"{raw}\", using automatic parallelism",
+                "invalid RQMD_EMBED_PARALLELISM=\"{raw}\", using automatic parallelism",
                 raw = raw,
             );
             None
@@ -117,7 +118,7 @@ pub fn resolve_parallelism_override(env_value: Option<&str>) -> Option<usize> {
 /// Options for [`resolve_safe_parallelism`].
 #[derive(Debug, Clone)]
 pub struct ParallelismOptions<'a> {
-    /// Raw `QMD_EMBED_PARALLELISM` value, if any.
+    /// Raw `RQMD_EMBED_PARALLELISM` value, if any.
     pub env_value: Option<&'a str>,
     /// Caller-computed parallelism (e.g. derived from VRAM or CPU cores).
     pub computed: usize,

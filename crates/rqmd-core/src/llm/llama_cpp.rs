@@ -42,6 +42,7 @@ use llama_cpp_2::token::data::LlamaTokenData;
 use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::env_keys;
 use crate::llm::backend;
 use crate::llm::config;
 use crate::llm::error::{Error, Result};
@@ -226,12 +227,12 @@ impl LlamaCpp {
 
         let embed_par = resolve_pool_parallelism(
             config.embed_parallelism,
-            "QMD_EMBED_PARALLELISM",
+            env_keys::EMBED_PARALLELISM,
             DEFAULT_EMBED_PARALLELISM,
         );
         let rerank_par = resolve_pool_parallelism(
             config.rerank_parallelism,
-            "QMD_RERANK_PARALLELISM",
+            env_keys::RERANK_PARALLELISM,
             DEFAULT_RERANK_PARALLELISM,
         );
 
@@ -622,11 +623,11 @@ impl Llm for LlamaCpp {
     /// Expand a search query into `lex`/`vec`/`hyde` lines.
     ///
     /// **Context budget**: uses `self.expand_context_size` (env:
-    /// `QMD_EXPAND_CONTEXT_SIZE`, default 2048) for the generation
+    /// `RQMD_EXPAND_CONTEXT_SIZE`, default 2048) for the generation
     /// context, with a hard cap of 600 new tokens. Long queries +
     /// verbose chat templates can exceed the budget; if you see a
     /// "ctx.decode" error from this method, raise
-    /// `QMD_EXPAND_CONTEXT_SIZE` or override
+    /// `RQMD_EXPAND_CONTEXT_SIZE` or override
     /// [`LlamaCppConfig::expand_context_size`].
     async fn expand_query(&self, query: &str, opts: ExpandQueryOptions) -> Result<Vec<Queryable>> {
         self.ensure_alive()?;

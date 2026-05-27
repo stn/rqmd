@@ -136,8 +136,8 @@ covers Claude Code / Desktop integration).
 
 ## Models
 
-Defaults (overridable via `QMD_EMBED_MODEL` / `QMD_GENERATE_MODEL` /
-`QMD_RERANK_MODEL`):
+Defaults (overridable via `RQMD_EMBED_MODEL` / `RQMD_GENERATE_MODEL` /
+`RQMD_RERANK_MODEL`):
 
 | Role            | Model                                                  | Size    |
 |-----------------|--------------------------------------------------------|---------|
@@ -154,6 +154,9 @@ Defaults (overridable via `QMD_EMBED_MODEL` / `QMD_GENERATE_MODEL` /
   `~/Library/Caches/qmd/models` on macOS, `~/.cache/qmd/models` on Linux, or
   `$XDG_CACHE_HOME/qmd/models`. (Models keep qmd's `qmd` namespace for cache
   compatibility; rqmd's own data uses `rqmd`.)
+
+All runtime env vars use the `RQMD_` prefix; run `rqmd doctor` to see the
+full list.
 
 ## Workspace layout
 
@@ -172,8 +175,21 @@ The port aims to be faithful, not byte-identical. Notable divergences:
 - `rqmd mcp --daemon` always implies `--http`.
 - `rqmd update` does not shell out; `collection update-cmd` is stored but not
   executed, so run any pre-update commands (e.g. `git pull`) yourself.
-- Model env vars keep the `QMD_` prefix for compatibility; rqmd-specific vars
-  (config/index/cache) use the `RQMD_` prefix.
+
+## Migrating from 0.1.x
+
+`0.2.0` renames every runtime env var from `QMD_*` to `RQMD_*` so qmd and
+rqmd can coexist on the same machine without configuration crosstalk. If
+you have shell exports, systemd units, or wrapper scripts that set any of
+`QMD_EMBED_MODEL`, `QMD_GENERATE_MODEL`, `QMD_RERANK_MODEL`,
+`QMD_FORCE_CPU`, `QMD_LLAMA_GPU`, `QMD_DOCTOR_DEVICE_PROBE`,
+`QMD_EMBED_PARALLELISM`, `QMD_RERANK_PARALLELISM`,
+`QMD_EMBED_CONTEXT_SIZE`, `QMD_RERANK_CONTEXT_SIZE`,
+`QMD_EXPAND_CONTEXT_SIZE`, `QMD_EXPAND_USER_MESSAGE_PREFIX`,
+`QMD_EXPAND_SYSTEM_MESSAGE`, `QMD_EXPAND_FALLBACK_HYDE_TEMPLATE`,
+`QMD_EXPAND_TEMP`, `QMD_EXPAND_TOP_K`, `QMD_EXPAND_TOP_P`, or
+`QMD_EDITOR_URI`, replace the `QMD_` prefix with `RQMD_`. The previous
+`QMD_*` names are no longer read. See `CHANGELOG.md` for the full list.
 
 ## Credits & License
 

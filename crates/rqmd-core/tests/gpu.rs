@@ -7,6 +7,7 @@
 
 use serial_test::serial;
 
+use rqmd_core::env_keys;
 use rqmd_core::llm::gpu::{
     LlamaGpuMode, ParallelismOptions, resolve_llama_gpu_mode, resolve_llama_gpu_mode_from_env,
     resolve_parallelism_override, resolve_safe_parallelism, windows_cuda_serialization_required,
@@ -86,7 +87,7 @@ fn gpu_mode_unknown_value_warns_and_returns_auto() {
 
 #[test]
 fn force_cpu_overrides_gpu_setting_when_truthy() {
-    // Any non-off value of QMD_FORCE_CPU forces Off regardless of QMD_LLAMA_GPU.
+    // Any non-off value of RQMD_FORCE_CPU forces Off regardless of RQMD_LLAMA_GPU.
     assert_eq!(
         resolve_llama_gpu_mode(Some("metal"), Some("1")),
         LlamaGpuMode::Off
@@ -100,7 +101,7 @@ fn force_cpu_overrides_gpu_setting_when_truthy() {
 
 #[test]
 fn force_cpu_with_off_value_is_treated_as_unset() {
-    // QMD_FORCE_CPU=false means "don't force CPU"; QMD_LLAMA_GPU still wins.
+    // RQMD_FORCE_CPU=false means "don't force CPU"; RQMD_LLAMA_GPU still wins.
     assert_eq!(
         resolve_llama_gpu_mode(Some("auto"), Some("false")),
         LlamaGpuMode::Auto
@@ -113,29 +114,29 @@ fn force_cpu_with_off_value_is_treated_as_unset() {
 
 #[test]
 #[serial]
-fn from_env_reads_qmd_env_vars() {
-    let prev_gpu = std::env::var("QMD_LLAMA_GPU").ok();
-    let prev_cpu = std::env::var("QMD_FORCE_CPU").ok();
+fn from_env_reads_rqmd_env_vars() {
+    let prev_gpu = std::env::var(env_keys::LLAMA_GPU).ok();
+    let prev_cpu = std::env::var(env_keys::FORCE_CPU).ok();
     unsafe {
-        std::env::remove_var("QMD_LLAMA_GPU");
-        std::env::remove_var("QMD_FORCE_CPU");
+        std::env::remove_var(env_keys::LLAMA_GPU);
+        std::env::remove_var(env_keys::FORCE_CPU);
     }
     assert_eq!(resolve_llama_gpu_mode_from_env(), LlamaGpuMode::Auto);
 
     unsafe {
-        std::env::set_var("QMD_LLAMA_GPU", "off");
+        std::env::set_var(env_keys::LLAMA_GPU, "off");
     }
     assert_eq!(resolve_llama_gpu_mode_from_env(), LlamaGpuMode::Off);
 
     // restore
     unsafe {
         match prev_gpu {
-            Some(v) => std::env::set_var("QMD_LLAMA_GPU", v),
-            None => std::env::remove_var("QMD_LLAMA_GPU"),
+            Some(v) => std::env::set_var(env_keys::LLAMA_GPU, v),
+            None => std::env::remove_var(env_keys::LLAMA_GPU),
         }
         match prev_cpu {
-            Some(v) => std::env::set_var("QMD_FORCE_CPU", v),
-            None => std::env::remove_var("QMD_FORCE_CPU"),
+            Some(v) => std::env::set_var(env_keys::FORCE_CPU, v),
+            None => std::env::remove_var(env_keys::FORCE_CPU),
         }
     }
 }

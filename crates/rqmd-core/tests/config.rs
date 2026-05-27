@@ -1,6 +1,6 @@
 //! Integration tests for `rqmd_core::llm::config`.
 //!
-//! Tests that read or mutate `QMD_*` environment variables are marked
+//! Tests that read or mutate `RQMD_*` environment variables are marked
 //! `#[serial]` to avoid interleaving with each other (and with any
 //! other env-touching test in the crate). Rust 2024 made
 //! `std::env::set_var` `unsafe`, so the few mutating tests use an
@@ -8,6 +8,7 @@
 
 use serial_test::serial;
 
+use rqmd_core::env_keys;
 use rqmd_core::llm::config::{
     DEFAULT_EMBED_CONTEXT_SIZE, DEFAULT_EMBED_MODEL, DEFAULT_EXPAND_CONTEXT_SIZE,
     DEFAULT_GENERATE_MODEL, DEFAULT_RERANK_CONTEXT_SIZE, DEFAULT_RERANK_MODEL,
@@ -17,12 +18,12 @@ use rqmd_core::llm::config::{
 use rqmd_core::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
 use rqmd_core::llm::types::ModelResolutionConfig;
 
-const EMBED_ENV: &str = "QMD_EMBED_MODEL";
-const GENERATE_ENV: &str = "QMD_GENERATE_MODEL";
-const RERANK_ENV: &str = "QMD_RERANK_MODEL";
-const EMBED_CTX_ENV: &str = "QMD_EMBED_CONTEXT_SIZE";
-const RERANK_CTX_ENV: &str = "QMD_RERANK_CONTEXT_SIZE";
-const EXPAND_CTX_ENV: &str = "QMD_EXPAND_CONTEXT_SIZE";
+const EMBED_ENV: &str = env_keys::EMBED_MODEL;
+const GENERATE_ENV: &str = env_keys::GENERATE_MODEL;
+const RERANK_ENV: &str = env_keys::RERANK_MODEL;
+const EMBED_CTX_ENV: &str = env_keys::EMBED_CONTEXT_SIZE;
+const RERANK_CTX_ENV: &str = env_keys::RERANK_CONTEXT_SIZE;
+const EXPAND_CTX_ENV: &str = env_keys::EXPAND_CONTEXT_SIZE;
 
 /// Run `f` with `var` removed from the environment, then restore it.
 fn with_unset<F: FnOnce()>(var: &str, f: F) {
@@ -207,7 +208,7 @@ fn resolve_expand_context_size_errors_on_zero_config() {
 #[test]
 #[serial]
 fn resolve_expand_context_size_warns_and_falls_back_on_invalid_env() {
-    // TS parity: "falls back to default and warns when QMD_EXPAND_CONTEXT_SIZE
+    // TS parity: "falls back to default and warns when RQMD_EXPAND_CONTEXT_SIZE
     // is invalid". Mirrors the embed-version test above: a non-positive /
     // non-numeric / whitespace env value falls back to the default.
     for bad in ["bad", "0", "  "] {
@@ -215,7 +216,7 @@ fn resolve_expand_context_size_warns_and_falls_back_on_invalid_env() {
             assert_eq!(
                 resolve_expand_context_size(None).unwrap(),
                 DEFAULT_EXPAND_CONTEXT_SIZE,
-                "QMD_EXPAND_CONTEXT_SIZE={bad:?} must fall back to default",
+                "RQMD_EXPAND_CONTEXT_SIZE={bad:?} must fall back to default",
             );
         });
     }
