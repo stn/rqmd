@@ -56,7 +56,7 @@ async fn run() -> Result<()> {
     if args.no_gpu {
         // SAFETY: single-threaded at this point — tokio worker threads only
         // come into play once we hit an async LLM call below.
-        unsafe { std::env::set_var("QMD_FORCE_CPU", "1") };
+        unsafe { std::env::set_var(rqmd_core::env_keys::FORCE_CPU, "1") };
     }
 
     let palette = color::Palette::new(args.no_color);

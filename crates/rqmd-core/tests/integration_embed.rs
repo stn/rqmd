@@ -81,7 +81,7 @@ async fn embed_handles_input_larger_than_default_ubatch() {
 
     let llm = LlamaCpp::new(LlamaCppConfig {
         embed_parallelism: Some(1),
-        // Pin context size explicitly — without this, `QMD_EMBED_CONTEXT_SIZE`
+        // Pin context size explicitly — without this, `RQMD_EMBED_CONTEXT_SIZE`
         // from the developer's shell could change n_ctx and either mask the
         // bug (if set very high, ubatch ends up wider than needed) or
         // introduce an unrelated failure (if set very low, the input itself

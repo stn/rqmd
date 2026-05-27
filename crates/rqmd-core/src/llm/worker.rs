@@ -190,7 +190,7 @@ fn run_embed_worker(
 /// anything that fits in the context window also fits in a single
 /// ubatch (the pattern used in llama.cpp's own `examples/embedding`).
 ///
-/// `n_ctx` is resolved from `QMD_{EMBED,RERANK}_CONTEXT_SIZE` / config /
+/// `n_ctx` is resolved from `RQMD_{EMBED,RERANK}_CONTEXT_SIZE` / config /
 /// `DEFAULT_*_CONTEXT_SIZE`. `CHUNK_SIZE_TOKENS = 900` is the chunker
 /// invariant this ceiling must accommodate (see the warning in
 /// `store_ops::embed::generate_embeddings`).

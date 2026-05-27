@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version      = "0.1.1"
+version      = "0.2.0"
 edition      = "2024"
 license      = "MIT"
 authors      = ["Akira Ishino <akira@lumilab.jp>"]
@@ -16,8 +16,8 @@ homepage     = "https://github.com/stn/rqmd"
 description  = "Rust port of tobi/qmd — on-device hybrid search for markdown"
 
 [workspace.dependencies]
-rqmd-core = { path = "crates/rqmd-core", version = "0.1.1" }
-rqmd-mcp  = { path = "crates/rqmd-mcp",  version = "0.1.1" }
+rqmd-core = { path = "crates/rqmd-core", version = "0.2.0" }
+rqmd-mcp  = { path = "crates/rqmd-mcp",  version = "0.2.0" }
 
 serde      = { version = "1", features = ["derive"] }
 indexmap   = { version = "2", features = ["serde"] }

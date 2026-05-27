@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::env_keys;
 use crate::llm::error::{Error, Result};
 use crate::llm::types::ModelResolutionConfig;
 
@@ -70,32 +71,32 @@ pub const DEFAULT_EXPAND_TOP_P: f32 = 0.8;
 // Model URI resolution
 // =============================================================================
 
-/// Resolve the embedding model URI. Priority: config arg > `QMD_EMBED_MODEL`
+/// Resolve the embedding model URI. Priority: config arg > `RQMD_EMBED_MODEL`
 /// env var > [`DEFAULT_EMBED_MODEL`].
 pub fn resolve_embed_model(config: Option<&ModelResolutionConfig>) -> String {
     resolve_with_env(
         config.and_then(|c| c.embed.as_deref()),
-        "QMD_EMBED_MODEL",
+        env_keys::EMBED_MODEL,
         DEFAULT_EMBED_MODEL,
     )
 }
 
-/// Resolve the generation model URI. Priority: config > `QMD_GENERATE_MODEL`
+/// Resolve the generation model URI. Priority: config > `RQMD_GENERATE_MODEL`
 /// > [`DEFAULT_GENERATE_MODEL`].
 pub fn resolve_generate_model(config: Option<&ModelResolutionConfig>) -> String {
     resolve_with_env(
         config.and_then(|c| c.generate.as_deref()),
-        "QMD_GENERATE_MODEL",
+        env_keys::GENERATE_MODEL,
         DEFAULT_GENERATE_MODEL,
     )
 }
 
-/// Resolve the reranker model URI. Priority: config > `QMD_RERANK_MODEL`
+/// Resolve the reranker model URI. Priority: config > `RQMD_RERANK_MODEL`
 /// > [`DEFAULT_RERANK_MODEL`].
 pub fn resolve_rerank_model(config: Option<&ModelResolutionConfig>) -> String {
     resolve_with_env(
         config.and_then(|c| c.rerank.as_deref()),
-        "QMD_RERANK_MODEL",
+        env_keys::RERANK_MODEL,
         DEFAULT_RERANK_MODEL,
     )
 }
@@ -122,52 +123,52 @@ pub struct ResolvedModels {
 // =============================================================================
 
 /// Resolve the `expand_query` user-message prefix. Priority:
-/// YAML config > `QMD_EXPAND_USER_MESSAGE_PREFIX` env > [`DEFAULT_EXPAND_USER_MESSAGE_PREFIX`].
+/// YAML config > `RQMD_EXPAND_USER_MESSAGE_PREFIX` env > [`DEFAULT_EXPAND_USER_MESSAGE_PREFIX`].
 /// `Some("")` from either YAML or env is honoured as an explicit empty prefix.
 pub fn resolve_expand_user_message_prefix(config: Option<&str>) -> String {
     resolve_with_env_allow_empty(
         config,
-        "QMD_EXPAND_USER_MESSAGE_PREFIX",
+        env_keys::EXPAND_USER_MESSAGE_PREFIX,
         Some(DEFAULT_EXPAND_USER_MESSAGE_PREFIX),
     )
     .expect("default is Some, result must be Some")
 }
 
 /// Resolve the optional `expand_query` system message. Priority:
-/// YAML config > `QMD_EXPAND_SYSTEM_MESSAGE` env > `None`.
+/// YAML config > `RQMD_EXPAND_SYSTEM_MESSAGE` env > `None`.
 /// `Some("")` is honoured as an explicit empty system message (suppresses
 /// Llama-3 / similar templates' default system prompt).
 pub fn resolve_expand_system_message(config: Option<&str>) -> Option<String> {
-    resolve_with_env_allow_empty(config, "QMD_EXPAND_SYSTEM_MESSAGE", None)
+    resolve_with_env_allow_empty(config, env_keys::EXPAND_SYSTEM_MESSAGE, None)
 }
 
 /// Resolve the HyDE fallback template. Priority:
-/// YAML config > `QMD_EXPAND_FALLBACK_HYDE_TEMPLATE` env > [`DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE`].
+/// YAML config > `RQMD_EXPAND_FALLBACK_HYDE_TEMPLATE` env > [`DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE`].
 pub fn resolve_expand_fallback_hyde_template(config: Option<&str>) -> String {
     resolve_with_env_allow_empty(
         config,
-        "QMD_EXPAND_FALLBACK_HYDE_TEMPLATE",
+        env_keys::EXPAND_FALLBACK_HYDE_TEMPLATE,
         Some(DEFAULT_EXPAND_FALLBACK_HYDE_TEMPLATE),
     )
     .expect("default is Some, result must be Some")
 }
 
 /// Resolve the `expand_query` sampler temperature. Priority:
-/// YAML config > `QMD_EXPAND_TEMP` env > [`DEFAULT_EXPAND_TEMP`].
+/// YAML config > `RQMD_EXPAND_TEMP` env > [`DEFAULT_EXPAND_TEMP`].
 pub fn resolve_expand_temp(config: Option<f32>) -> f32 {
-    resolve_numeric_env(config, "QMD_EXPAND_TEMP", DEFAULT_EXPAND_TEMP)
+    resolve_numeric_env(config, env_keys::EXPAND_TEMP, DEFAULT_EXPAND_TEMP)
 }
 
 /// Resolve the `expand_query` sampler `top_k`. Priority:
-/// YAML config > `QMD_EXPAND_TOP_K` env > [`DEFAULT_EXPAND_TOP_K`].
+/// YAML config > `RQMD_EXPAND_TOP_K` env > [`DEFAULT_EXPAND_TOP_K`].
 pub fn resolve_expand_top_k(config: Option<i32>) -> i32 {
-    resolve_numeric_env(config, "QMD_EXPAND_TOP_K", DEFAULT_EXPAND_TOP_K)
+    resolve_numeric_env(config, env_keys::EXPAND_TOP_K, DEFAULT_EXPAND_TOP_K)
 }
 
 /// Resolve the `expand_query` sampler `top_p`. Priority:
-/// YAML config > `QMD_EXPAND_TOP_P` env > [`DEFAULT_EXPAND_TOP_P`].
+/// YAML config > `RQMD_EXPAND_TOP_P` env > [`DEFAULT_EXPAND_TOP_P`].
 pub fn resolve_expand_top_p(config: Option<f32>) -> f32 {
-    resolve_numeric_env(config, "QMD_EXPAND_TOP_P", DEFAULT_EXPAND_TOP_P)
+    resolve_numeric_env(config, env_keys::EXPAND_TOP_P, DEFAULT_EXPAND_TOP_P)
 }
 
 /// Generic numeric env-var resolver: YAML config > env (parsed) > default.
@@ -266,21 +267,21 @@ pub fn default_model_cache_dir() -> Option<PathBuf> {
 // Context size resolution
 // =============================================================================
 
-/// Resolve the embed context size from env (`QMD_EMBED_CONTEXT_SIZE`),
+/// Resolve the embed context size from env (`RQMD_EMBED_CONTEXT_SIZE`),
 /// falling back to [`DEFAULT_EMBED_CONTEXT_SIZE`]. Invalid env values
 /// produce a `tracing::warn!` and the default is used.
 pub fn resolve_embed_context_size() -> usize {
-    resolve_context_size_env("QMD_EMBED_CONTEXT_SIZE", DEFAULT_EMBED_CONTEXT_SIZE)
+    resolve_context_size_env(env_keys::EMBED_CONTEXT_SIZE, DEFAULT_EMBED_CONTEXT_SIZE)
 }
 
-/// Resolve the rerank context size from env (`QMD_RERANK_CONTEXT_SIZE`).
+/// Resolve the rerank context size from env (`RQMD_RERANK_CONTEXT_SIZE`).
 pub fn resolve_rerank_context_size() -> usize {
-    resolve_context_size_env("QMD_RERANK_CONTEXT_SIZE", DEFAULT_RERANK_CONTEXT_SIZE)
+    resolve_context_size_env(env_keys::RERANK_CONTEXT_SIZE, DEFAULT_RERANK_CONTEXT_SIZE)
 }
 
 /// Resolve the expand-query context size.
 ///
-/// `config_value` takes priority. Then `QMD_EXPAND_CONTEXT_SIZE` env var.
+/// `config_value` takes priority. Then `RQMD_EXPAND_CONTEXT_SIZE` env var.
 /// Then [`DEFAULT_EXPAND_CONTEXT_SIZE`].
 ///
 /// Errors when `config_value` is `Some(0)` or otherwise invalid; matches
@@ -298,7 +299,7 @@ pub fn resolve_expand_context_size(config_value: Option<usize>) -> Result<usize>
         return Ok(v);
     }
     Ok(resolve_context_size_env(
-        "QMD_EXPAND_CONTEXT_SIZE",
+        env_keys::EXPAND_CONTEXT_SIZE,
         DEFAULT_EXPAND_CONTEXT_SIZE,
     ))
 }
@@ -333,7 +334,7 @@ fn resolve_context_size_env(var: &'static str, default: usize) -> usize {
 #[cfg(test)]
 mod tests {
     //! Port of qmd's `test/cli.test.ts` "CLI Embed" resolution cases
-    //! (`prefers QMD_EMBED_MODEL`, `falls back to the default embed model`).
+    //! (`prefers RQMD_EMBED_MODEL`, `falls back to the default embed model`).
     //! These are pure resolution unit tests in qmd too — the resolved URI is
     //! never printed by any rqmd command, so they cannot be e2e (process-spawn)
     //! tests here. Extended to all three model slots.
@@ -347,7 +348,11 @@ mod tests {
     /// leak state — mirrors the `EnvGuard` pattern in `store::path::tests`.
     /// `set_var`/`remove_var` are `unsafe` since Rust 2024; pair with
     /// `#[serial]` so no other test reads these vars concurrently.
-    const ENV_KEYS: &[&str] = &["QMD_EMBED_MODEL", "QMD_GENERATE_MODEL", "QMD_RERANK_MODEL"];
+    const ENV_KEYS: &[&str] = &[
+        env_keys::EMBED_MODEL,
+        env_keys::GENERATE_MODEL,
+        env_keys::RERANK_MODEL,
+    ];
 
     struct EnvGuard(Vec<(&'static str, Option<String>)>);
 
@@ -383,9 +388,9 @@ mod tests {
 
     #[test]
     #[serial]
-    fn prefers_env_qmd_embed_model_over_default() {
+    fn prefers_env_rqmd_embed_model_over_default() {
         let g = EnvGuard::new();
-        g.set("QMD_EMBED_MODEL", "hf:env/embed-model.gguf");
+        g.set("RQMD_EMBED_MODEL", "hf:env/embed-model.gguf");
         assert_eq!(resolve_embed_model(None), "hf:env/embed-model.gguf");
     }
 
@@ -393,7 +398,7 @@ mod tests {
     #[serial]
     fn falls_back_to_default_embed_model_when_unset() {
         let g = EnvGuard::new();
-        g.unset("QMD_EMBED_MODEL");
+        g.unset("RQMD_EMBED_MODEL");
         assert_eq!(resolve_embed_model(None), DEFAULT_EMBED_MODEL);
     }
 
@@ -401,7 +406,7 @@ mod tests {
     #[serial]
     fn config_value_takes_priority_over_env_and_default() {
         let g = EnvGuard::new();
-        g.set("QMD_EMBED_MODEL", "hf:env/embed-model.gguf");
+        g.set("RQMD_EMBED_MODEL", "hf:env/embed-model.gguf");
         let cfg = ModelResolutionConfig {
             embed: Some("hf:config/embed-model.gguf".to_string()),
             ..Default::default()
@@ -416,8 +421,8 @@ mod tests {
     #[serial]
     fn generate_and_rerank_resolve_env_then_default() {
         let g = EnvGuard::new();
-        g.set("QMD_GENERATE_MODEL", "hf:env/generate.gguf");
-        g.unset("QMD_RERANK_MODEL");
+        g.set("RQMD_GENERATE_MODEL", "hf:env/generate.gguf");
+        g.unset("RQMD_RERANK_MODEL");
         assert_eq!(resolve_generate_model(None), "hf:env/generate.gguf");
         assert_eq!(resolve_rerank_model(None), DEFAULT_RERANK_MODEL);
     }
@@ -429,12 +434,12 @@ mod tests {
     /// Env vars touched by the `expand_*` resolvers. Snapshotted and
     /// restored per test like the URI guard above.
     const EXPAND_ENV_KEYS: &[&str] = &[
-        "QMD_EXPAND_USER_MESSAGE_PREFIX",
-        "QMD_EXPAND_SYSTEM_MESSAGE",
-        "QMD_EXPAND_FALLBACK_HYDE_TEMPLATE",
-        "QMD_EXPAND_TEMP",
-        "QMD_EXPAND_TOP_K",
-        "QMD_EXPAND_TOP_P",
+        env_keys::EXPAND_USER_MESSAGE_PREFIX,
+        env_keys::EXPAND_SYSTEM_MESSAGE,
+        env_keys::EXPAND_FALLBACK_HYDE_TEMPLATE,
+        env_keys::EXPAND_TEMP,
+        env_keys::EXPAND_TOP_K,
+        env_keys::EXPAND_TOP_P,
     ];
 
     struct ExpandEnvGuard(Vec<(&'static str, Option<String>)>);
@@ -490,7 +495,7 @@ mod tests {
     fn expand_user_message_prefix_env_overrides_default() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_USER_MESSAGE_PREFIX", "### Task:");
+        g.set("RQMD_EXPAND_USER_MESSAGE_PREFIX", "### Task:");
         assert_eq!(resolve_expand_user_message_prefix(None), "### Task:");
     }
 
@@ -498,11 +503,11 @@ mod tests {
     #[serial]
     fn expand_user_message_prefix_empty_env_is_honoured() {
         // This is the load-bearing case for Llama Swallow / non-Qwen users:
-        // `QMD_EXPAND_USER_MESSAGE_PREFIX=""` must produce an empty prefix,
+        // `RQMD_EXPAND_USER_MESSAGE_PREFIX=""` must produce an empty prefix,
         // not fall through to the `/no_think` default.
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_USER_MESSAGE_PREFIX", "");
+        g.set("RQMD_EXPAND_USER_MESSAGE_PREFIX", "");
         assert_eq!(resolve_expand_user_message_prefix(None), "");
     }
 
@@ -511,7 +516,7 @@ mod tests {
     fn expand_user_message_prefix_config_beats_env() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_USER_MESSAGE_PREFIX", "from-env");
+        g.set("RQMD_EXPAND_USER_MESSAGE_PREFIX", "from-env");
         assert_eq!(
             resolve_expand_user_message_prefix(Some("from-config")),
             "from-config",
@@ -525,7 +530,7 @@ mod tests {
         // prefix and not fall through.
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_USER_MESSAGE_PREFIX", "from-env");
+        g.set("RQMD_EXPAND_USER_MESSAGE_PREFIX", "from-env");
         assert_eq!(resolve_expand_user_message_prefix(Some("")), "");
     }
 
@@ -545,7 +550,7 @@ mod tests {
         // not `None`.
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_SYSTEM_MESSAGE", "");
+        g.set("RQMD_EXPAND_SYSTEM_MESSAGE", "");
         assert_eq!(resolve_expand_system_message(None), Some(String::new()),);
     }
 
@@ -554,7 +559,7 @@ mod tests {
     fn expand_system_message_config_overrides_env() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_SYSTEM_MESSAGE", "from-env");
+        g.set("RQMD_EXPAND_SYSTEM_MESSAGE", "from-env");
         assert_eq!(
             resolve_expand_system_message(Some("from-config")),
             Some("from-config".to_string()),
@@ -577,7 +582,7 @@ mod tests {
     fn expand_fallback_hyde_template_japanese_via_env() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_FALLBACK_HYDE_TEMPLATE", "{query}に関する情報");
+        g.set("RQMD_EXPAND_FALLBACK_HYDE_TEMPLATE", "{query}に関する情報");
         assert_eq!(
             resolve_expand_fallback_hyde_template(None),
             "{query}に関する情報",
@@ -597,7 +602,7 @@ mod tests {
     fn expand_temp_env_overrides_default() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_TEMP", "0.42");
+        g.set("RQMD_EXPAND_TEMP", "0.42");
         assert!((resolve_expand_temp(None) - 0.42).abs() < f32::EPSILON);
     }
 
@@ -606,7 +611,7 @@ mod tests {
     fn expand_temp_invalid_env_warns_and_falls_back() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_TEMP", "not-a-number");
+        g.set("RQMD_EXPAND_TEMP", "not-a-number");
         assert!((resolve_expand_temp(None) - DEFAULT_EXPAND_TEMP).abs() < f32::EPSILON);
     }
 
@@ -615,7 +620,7 @@ mod tests {
     fn expand_top_k_config_beats_env() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_TOP_K", "50");
+        g.set("RQMD_EXPAND_TOP_K", "50");
         assert_eq!(resolve_expand_top_k(Some(99)), 99);
     }
 
@@ -624,7 +629,7 @@ mod tests {
     fn expand_top_p_env_overrides_default() {
         let g = ExpandEnvGuard::new();
         g.unset_all();
-        g.set("QMD_EXPAND_TOP_P", "0.95");
+        g.set("RQMD_EXPAND_TOP_P", "0.95");
         assert!((resolve_expand_top_p(None) - 0.95).abs() < f32::EPSILON);
     }
 }

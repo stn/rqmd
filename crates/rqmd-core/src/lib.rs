@@ -62,6 +62,7 @@
 pub mod bench;
 pub mod collections;
 pub mod db;
+pub mod env_keys;
 pub mod llm;
 pub mod paths;
 pub mod rqmd_store;

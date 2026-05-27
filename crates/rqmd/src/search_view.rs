@@ -41,15 +41,13 @@ pub const DEFAULT_EDITOR_URI_TEMPLATE: &str = "vscode://file/{path}:{line}:{col}
 
 /// Resolve the editor-URI template for clickable CLI links. Precedence
 /// (mirrors `getEditorUriTemplate`, `qmd.ts:2054-2078`): env `RQMD_EDITOR_URI`
-/// (rqmd-native) → env `QMD_EDITOR_URI` → config `editor_uri`
-/// (`editor_uri_template` alias handled on deserialize) → built-in default.
+/// → config `editor_uri` (`editor_uri_template` alias handled on deserialize)
+/// → built-in default.
 pub fn editor_uri_template(config_editor_uri: Option<&str>) -> String {
-    for var in ["RQMD_EDITOR_URI", "QMD_EDITOR_URI"] {
-        if let Ok(t) = std::env::var(var) {
-            let t = t.trim();
-            if !t.is_empty() {
-                return t.to_string();
-            }
+    if let Ok(t) = std::env::var("RQMD_EDITOR_URI") {
+        let t = t.trim();
+        if !t.is_empty() {
+            return t.to_string();
         }
     }
     if let Some(t) = config_editor_uri {

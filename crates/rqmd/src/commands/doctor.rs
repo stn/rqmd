@@ -1,9 +1,8 @@
 //! `rqmd doctor` — index / runtime / device diagnostics.
 //!
 //! Port of qmd's `showDoctor` (`src/cli/qmd.ts`, origin/main / v2.5.x). Output
-//! wording mirrors qmd; tool name is rqmd (sanctioned branding) and env-var
-//! names keep their existing rqmd spelling (`QMD_*` for llama/model knobs,
-//! `RQMD_*` for path knobs). Two checks (`legacy fingerprint adoption`,
+//! wording mirrors qmd; tool name is rqmd (sanctioned branding) and all env
+//! vars use the `RQMD_` prefix. Two checks (`legacy fingerprint adoption`,
 //! `embedding vector sample`) load the embed model, so this command is async;
 //! they are gated on the model being cached + a `vectors_vec` table existing so
 //! a model-less / CI environment skips them instead of downloading.
@@ -17,6 +16,7 @@ use anyhow::Result;
 
 use rqmd_core::Store;
 use rqmd_core::collections::ModelsConfig;
+use rqmd_core::env_keys;
 use rqmd_core::llm::config::{
     DEFAULT_EMBED_MODEL, DEFAULT_GENERATE_MODEL, DEFAULT_RERANK_MODEL, ResolvedModels,
 };
@@ -285,13 +285,13 @@ fn normalized_doctor_next_steps(steps: Vec<String>) -> Vec<String> {
 }
 
 /// Configured device mode (moved from `status.rs`). Mirrors qmd
-/// `configuredGpuModeLabel`: `CPU forced` when `QMD_FORCE_CPU` is truthy
-/// (rqmd's `--no-gpu` sets it), else explicit `QMD_LLAMA_GPU`, else `auto`.
+/// `configuredGpuModeLabel`: `CPU forced` when `RQMD_FORCE_CPU` is truthy
+/// (rqmd's `--no-gpu` sets it), else explicit `RQMD_LLAMA_GPU`, else `auto`.
 fn device_mode() -> String {
     if is_force_cpu() {
-        return "CPU forced (QMD_FORCE_CPU)".to_string();
+        return "CPU forced (RQMD_FORCE_CPU)".to_string();
     }
-    if let Ok(v) = std::env::var("QMD_LLAMA_GPU") {
+    if let Ok(v) = std::env::var(env_keys::LLAMA_GPU) {
         let t = v.trim();
         if !t.is_empty() {
             return t.to_string();
@@ -301,7 +301,7 @@ fn device_mode() -> String {
 }
 
 fn is_force_cpu() -> bool {
-    match std::env::var("QMD_FORCE_CPU") {
+    match std::env::var(env_keys::FORCE_CPU) {
         Ok(v) => {
             let t = v.trim().to_ascii_lowercase();
             !t.is_empty()
@@ -393,65 +393,61 @@ fn collect_environment_overrides(
 
     push_model_override(
         &mut out,
-        "QMD_EMBED_MODEL",
+        env_keys::EMBED_MODEL,
         "embed",
         &resolved.embed,
         model_config(configured, |m| &m.embed),
     );
     push_model_override(
         &mut out,
-        "QMD_GENERATE_MODEL",
+        env_keys::GENERATE_MODEL,
         "generate",
         &resolved.generate,
         model_config(configured, |m| &m.generate),
     );
     push_model_override(
         &mut out,
-        "QMD_RERANK_MODEL",
+        env_keys::RERANK_MODEL,
         "rerank",
         &resolved.rerank,
         model_config(configured, |m| &m.rerank),
     );
 
     add!(
-        "QMD_FORCE_CPU",
+        env_keys::FORCE_CPU,
         "forces llama.cpp to bypass GPU backends; embeddings/query will be slower but GPU crashes are avoided"
     );
     add!(
-        "QMD_LLAMA_GPU",
+        env_keys::LLAMA_GPU,
         "selects llama.cpp GPU backend (metal/cuda/vulkan) or disables GPU when set to false/off/0"
     );
     add!(
-        "QMD_DOCTOR_DEVICE_PROBE",
+        env_keys::DOCTOR_DEVICE_PROBE,
         "controls rqmd doctor native device probing; 0/off skips GPU probing"
     );
     add!(
-        "QMD_EMBED_PARALLELISM",
+        env_keys::EMBED_PARALLELISM,
         "overrides embedding parallel context count; too high can exhaust RAM/VRAM"
     );
     add!(
-        "QMD_RERANK_PARALLELISM",
+        env_keys::RERANK_PARALLELISM,
         "overrides reranker parallel context count; too high can exhaust RAM/VRAM"
     );
     add!(
-        "QMD_EXPAND_CONTEXT_SIZE",
+        env_keys::EXPAND_CONTEXT_SIZE,
         "overrides query expansion context size; larger values use more memory"
     );
     add!(
-        "QMD_RERANK_CONTEXT_SIZE",
+        env_keys::RERANK_CONTEXT_SIZE,
         "overrides reranker context size; larger values use more memory"
     );
     add!(
-        "QMD_EMBED_CONTEXT_SIZE",
+        env_keys::EMBED_CONTEXT_SIZE,
         "overrides embed context size; larger values use more memory"
     );
     add!(
         "RQMD_EDITOR_URI",
         "overrides clickable editor link template in terminal output"
-    );
-    add!(
-        "QMD_EDITOR_URI",
-        "overrides clickable editor link template in terminal output (legacy alias)"
     );
     add!(
         "RQMD_SKILLS_DIR",
@@ -511,21 +507,21 @@ fn check_model_defaults(p: &Palette, resolved: &ResolvedModels, configured: &Opt
     let checks: [(&str, &str, &str, Option<&str>, &str); 3] = [
         (
             "embedding",
-            "QMD_EMBED_MODEL",
+            env_keys::EMBED_MODEL,
             &resolved.embed,
             model_config(configured, |m| &m.embed),
             DEFAULT_EMBED_MODEL,
         ),
         (
             "generation",
-            "QMD_GENERATE_MODEL",
+            env_keys::GENERATE_MODEL,
             &resolved.generate,
             model_config(configured, |m| &m.generate),
             DEFAULT_GENERATE_MODEL,
         ),
         (
             "reranking",
-            "QMD_RERANK_MODEL",
+            env_keys::RERANK_MODEL,
             &resolved.rerank,
             model_config(configured, |m| &m.rerank),
             DEFAULT_RERANK_MODEL,
@@ -668,7 +664,7 @@ fn check_device(p: &Palette, next_steps: &mut Vec<String>) {
     check(p, "device mode", true, &device_mode());
 
     let skip = matches!(
-        std::env::var("QMD_DOCTOR_DEVICE_PROBE")
+        std::env::var(env_keys::DOCTOR_DEVICE_PROBE)
             .map(|v| v.trim().to_ascii_lowercase())
             .as_deref(),
         Ok("0" | "false" | "off" | "no" | "skip")
@@ -678,16 +674,16 @@ fn check_device(p: &Palette, next_steps: &mut Vec<String>) {
             p,
             "device probe",
             false,
-            "skipped by QMD_DOCTOR_DEVICE_PROBE=0. Next: unset it and rerun `rqmd doctor` to verify GPU/CPU acceleration",
+            "skipped by RQMD_DOCTOR_DEVICE_PROBE=0. Next: unset it and rerun `rqmd doctor` to verify GPU/CPU acceleration",
         );
         next_steps.push(
-            "Unset `QMD_DOCTOR_DEVICE_PROBE` and rerun `rqmd doctor` when you want to verify llama.cpp device acceleration."
+            "Unset `RQMD_DOCTOR_DEVICE_PROBE` and rerun `rqmd doctor` when you want to verify llama.cpp device acceleration."
                 .into(),
         );
         return;
     }
 
-    let crash_hint = "Probing native llama backend now. If rqmd crashes here, rerun with `QMD_FORCE_CPU=1 rqmd doctor` (or `QMD_DOCTOR_DEVICE_PROBE=0 rqmd doctor` to skip this probe).";
+    let crash_hint = "Probing native llama backend now. If rqmd crashes here, rerun with `RQMD_FORCE_CPU=1 rqmd doctor` (or `RQMD_DOCTOR_DEVICE_PROBE=0 rqmd doctor` to skip this probe).";
     let is_tty = std::io::stderr().is_terminal();
     if is_tty {
         eprint!("{}{}{}", p.dim(), crash_hint, p.reset());
@@ -706,11 +702,11 @@ fn check_device(p: &Palette, next_steps: &mut Vec<String>) {
                 "device probe",
                 false,
                 &format!(
-                    "probe failed: {e}. Next: run with QMD_FORCE_CPU=1 to bypass GPU probing, or set QMD_LLAMA_GPU=metal|cuda|vulkan and retry"
+                    "probe failed: {e}. Next: run with RQMD_FORCE_CPU=1 to bypass GPU probing, or set RQMD_LLAMA_GPU=metal|cuda|vulkan and retry"
                 ),
             );
             next_steps.push(
-                "GPU probe failed; try `QMD_FORCE_CPU=1 rqmd doctor` to confirm CPU fallback, then fix GPU drivers/backend if acceleration is expected."
+                "GPU probe failed; try `RQMD_FORCE_CPU=1 rqmd doctor` to confirm CPU fallback, then fix GPU drivers/backend if acceleration is expected."
                     .into(),
             );
             return;
@@ -731,7 +727,7 @@ fn check_device(p: &Palette, next_steps: &mut Vec<String>) {
             "device probe",
             false,
             &format!(
-                "running on CPU ({cpu_cores} math cores). Next: install/configure Metal, CUDA, or Vulkan for faster embeddings, or set QMD_FORCE_CPU=1 to make CPU mode explicit"
+                "running on CPU ({cpu_cores} math cores). Next: install/configure Metal, CUDA, or Vulkan for faster embeddings, or set RQMD_FORCE_CPU=1 to make CPU mode explicit"
             ),
         );
         next_steps.push(
@@ -783,12 +779,12 @@ fn check_device(p: &Palette, next_steps: &mut Vec<String>) {
             "device probe",
             false,
             &format!(
-                "{}. Next: check QMD_LLAMA_GPU and llama.cpp backend support",
+                "{}. Next: check RQMD_LLAMA_GPU and llama.cpp backend support",
                 parts.join("; ")
             ),
         );
         next_steps.push(
-            "GPU was detected but offloading is disabled; check `QMD_LLAMA_GPU=metal|cuda|vulkan` and rerun `rqmd doctor`."
+            "GPU was detected but offloading is disabled; check `RQMD_LLAMA_GPU=metal|cuda|vulkan` and rerun `rqmd doctor`."
                 .into(),
         );
     }

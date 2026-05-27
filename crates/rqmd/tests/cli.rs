@@ -93,7 +93,7 @@ mod cli_init {
         let out = e.run_in_env(
             &project,
             &["init"],
-            &[("QMD_EMBED_MODEL", "hf:example/custom-embed.gguf")],
+            &[("RQMD_EMBED_MODEL", "hf:example/custom-embed.gguf")],
         );
         out.assert_ok();
 
@@ -404,18 +404,12 @@ mod cli_status {
     #[test]
     fn status_omits_device_section_doctor_owns_it() {
         // qmd v2.5.0 parity: GPU/device diagnostics moved out of `status` into
-        // `doctor`. `status` must no longer print a Device section or mention
-        // the retired QMD_STATUS_DEVICE_PROBE knob.
+        // `doctor`. `status` must no longer print a Device section.
         let e = env();
         e.run(&["collection", "add", "."]).assert_ok();
         let out = e.run(&["status"]);
         out.assert_ok();
         assert!(!out.stdout.contains("Device"), "stdout: {}", out.stdout);
-        assert!(
-            !out.stdout.contains("QMD_STATUS_DEVICE_PROBE"),
-            "stdout: {}",
-            out.stdout
-        );
         assert!(!out.stdout.contains("not probed"), "stdout: {}", out.stdout);
     }
 
@@ -447,7 +441,7 @@ mod cli_doctor {
         e.run_env(
             &["doctor"],
             &[
-                ("QMD_DOCTOR_DEVICE_PROBE", "0"),
+                ("RQMD_DOCTOR_DEVICE_PROBE", "0"),
                 ("XDG_CACHE_HOME", cache.as_str()),
             ],
         )
@@ -479,7 +473,7 @@ mod cli_doctor {
         }
         // device probe was disabled via the env knob.
         assert!(
-            out.stdout.contains("skipped by QMD_DOCTOR_DEVICE_PROBE=0"),
+            out.stdout.contains("skipped by RQMD_DOCTOR_DEVICE_PROBE=0"),
             "stdout: {}",
             out.stdout
         );
@@ -515,9 +509,9 @@ mod cli_doctor {
         let out = e.run_env(
             &["doctor"],
             &[
-                ("QMD_DOCTOR_DEVICE_PROBE", "0"),
+                ("RQMD_DOCTOR_DEVICE_PROBE", "0"),
                 ("XDG_CACHE_HOME", cache.as_str()),
-                ("QMD_EMBED_MODEL", bad_str.as_str()),
+                ("RQMD_EMBED_MODEL", bad_str.as_str()),
             ],
         );
         out.assert_ok();

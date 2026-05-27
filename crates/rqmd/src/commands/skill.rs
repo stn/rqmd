@@ -121,12 +121,11 @@ fn path(args: SkillsPathArgs) -> Result<()> {
     Ok(())
 }
 
-/// On-disk directory for the bundled skill. `RQMD_SKILLS_DIR` (mirrors qmd's
-/// `QMD_SKILLS_DIR`) overrides; otherwise derive it from the crate's in-tree
-/// `skills/` dir via `CARGO_MANIFEST_DIR` at compile time. NOTE: the fallback
-/// path won't exist on an installed binary — `skills get`/`skill show` serve the
-/// *embedded* content regardless, and the `skills path` test only checks the
-/// path suffix.
+/// On-disk directory for the bundled skill. `RQMD_SKILLS_DIR` overrides;
+/// otherwise derive it from the crate's in-tree `skills/` dir via
+/// `CARGO_MANIFEST_DIR` at compile time. NOTE: the fallback path won't exist
+/// on an installed binary — `skills get`/`skill show` serve the *embedded*
+/// content regardless, and the `skills path` test only checks the path suffix.
 fn skills_dir() -> PathBuf {
     if let Ok(d) = std::env::var("RQMD_SKILLS_DIR") {
         let d = d.trim();
