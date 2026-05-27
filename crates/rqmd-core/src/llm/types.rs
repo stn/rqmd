@@ -122,7 +122,7 @@ impl QueryType {
 }
 
 /// One query variation produced by `expand_query`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Queryable {
     #[serde(rename = "type")]
     pub type_: QueryType,

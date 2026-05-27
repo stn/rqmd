@@ -2,7 +2,7 @@
 
 use rqmd_core::llm::prompt::{
     QWEN3_RERANKER_INSTRUCT, build_expand_query_user_message, build_qwen3_rerank_prompt,
-    fallback_queryables, filter_with_query_terms, parse_expand_query_output,
+    fallback_queryables, filter_with_query_terms, finalize_expand_query, parse_expand_query_output,
 };
 use rqmd_core::llm::types::{QueryType, Queryable};
 
@@ -134,6 +134,21 @@ fn filter_with_query_terms_keeps_only_on_topic_lines() {
 }
 
 #[test]
+fn parse_expand_query_output_accepts_space_before_colon() {
+    // qmd parity: TS uses `line.slice(0, colonIdx).trim()` so `lex : foo`
+    // is accepted. Pre-fix rqmd's `strip_prefix("lex:")` rejected it.
+    let raw = "lex : tokio\nvec : rust async\nhyde : Tokio docs\n";
+    let parsed = parse_expand_query_output(raw);
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed[0].type_, QueryType::Lex);
+    assert_eq!(parsed[0].text, "tokio");
+    assert_eq!(parsed[1].type_, QueryType::Vec);
+    assert_eq!(parsed[1].text, "rust async");
+    assert_eq!(parsed[2].type_, QueryType::Hyde);
+    assert_eq!(parsed[2].text, "Tokio docs");
+}
+
+#[test]
 fn filter_with_query_terms_passes_everything_when_query_is_empty() {
     let queryables = vec![Queryable {
         type_: QueryType::Lex,
@@ -162,4 +177,66 @@ fn fallback_drops_lex_when_lexical_disabled() {
     let fallback = fallback_queryables("hello world", false, "Information about {query}");
     let types: Vec<_> = fallback.iter().map(|q| q.type_).collect();
     assert_eq!(types, vec![QueryType::Hyde, QueryType::Vec]);
+}
+
+// =============================================================================
+// finalize_expand_query — qmd-parity ordering (lex-exclude → empty-check → fallback)
+// =============================================================================
+
+#[test]
+fn finalize_lex_only_filtered_falls_back_when_lexical_excluded() {
+    // 乖離の核心ケース: filter_with_query_terms 通過後の候補が lex のみで
+    // include_lexical=false なら、qmd 同様 [hyde, vec] fallback を返す。
+    // Pre-fix rqmd は空判定が lex 除外より前だったため空 Vec を返していた。
+    let filtered = vec![Queryable {
+        type_: QueryType::Lex,
+        text: "tokio".into(),
+    }];
+    let out = finalize_expand_query(filtered, "rust async", false, "Information about {query}");
+    let types: Vec<_> = out.iter().map(|q| q.type_).collect();
+    assert_eq!(types, vec![QueryType::Hyde, QueryType::Vec]);
+    assert!(out.iter().all(|q| q.type_ != QueryType::Lex));
+}
+
+#[test]
+fn finalize_mixed_filtered_strips_lex_when_excluded() {
+    let filtered = vec![
+        Queryable {
+            type_: QueryType::Lex,
+            text: "tokio".into(),
+        },
+        Queryable {
+            type_: QueryType::Vec,
+            text: "rust async".into(),
+        },
+        Queryable {
+            type_: QueryType::Hyde,
+            text: "Tokio is...".into(),
+        },
+    ];
+    let out = finalize_expand_query(filtered, "rust async", false, "Information about {query}");
+    assert_eq!(out.len(), 2);
+    assert!(out.iter().all(|q| q.type_ != QueryType::Lex));
+}
+
+#[test]
+fn finalize_empty_filtered_falls_back_with_lex_when_lexical_included() {
+    let out = finalize_expand_query(vec![], "rust async", true, "Information about {query}");
+    let types: Vec<_> = out.iter().map(|q| q.type_).collect();
+    assert_eq!(types, vec![QueryType::Hyde, QueryType::Lex, QueryType::Vec]);
+}
+
+#[test]
+fn finalize_non_empty_filtered_passes_through_when_lexical_included() {
+    let filtered = vec![Queryable {
+        type_: QueryType::Vec,
+        text: "rust async".into(),
+    }];
+    let out = finalize_expand_query(
+        filtered.clone(),
+        "rust async",
+        true,
+        "Information about {query}",
+    );
+    assert_eq!(out, filtered);
 }
