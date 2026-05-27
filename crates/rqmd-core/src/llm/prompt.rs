@@ -97,35 +97,34 @@ content ::= [^\n]+
 "#;
 
 /// Parse the raw model output from `expand_query` into structured
-/// `Queryable`s. Skips any lines that don't begin with one of the three
+/// `Queryable`s. Skips any lines that don't carry one of the three
 /// known prefixes (this is how we recover from `<think>...</think>`
 /// noise without grammar enforcement).
 ///
+/// Matches qmd's parser shape (`line.slice(0, colonIdx).trim()`): trims
+/// whitespace on both sides of the colon, so `lex : foo` is accepted in
+/// addition to `lex: foo` / `lex:foo`.
+///
 /// Returns an empty Vec if no lines match; the caller is responsible for
-/// applying fallback behavior (TS lines 1362–1373).
+/// applying fallback behavior via [`finalize_expand_query`].
 pub fn parse_expand_query_output(raw: &str) -> Vec<crate::llm::types::Queryable> {
+    use crate::llm::types::{QueryType, Queryable};
     let mut out = Vec::new();
     for line in raw.lines() {
         let line = line.trim_start();
-        if let Some(rest) = line.strip_prefix("lex:") {
-            out.push(make_queryable(crate::llm::types::QueryType::Lex, rest));
-        } else if let Some(rest) = line.strip_prefix("vec:") {
-            out.push(make_queryable(crate::llm::types::QueryType::Vec, rest));
-        } else if let Some(rest) = line.strip_prefix("hyde:") {
-            out.push(make_queryable(crate::llm::types::QueryType::Hyde, rest));
-        }
+        let Some(colon_idx) = line.find(':') else {
+            continue;
+        };
+        let type_ = match line[..colon_idx].trim() {
+            "lex" => QueryType::Lex,
+            "vec" => QueryType::Vec,
+            "hyde" => QueryType::Hyde,
+            _ => continue,
+        };
+        let text = line[colon_idx + 1..].trim().to_owned();
+        out.push(Queryable { type_, text });
     }
     out
-}
-
-fn make_queryable(type_: crate::llm::types::QueryType, rest: &str) -> crate::llm::types::Queryable {
-    // The strict TS grammar required `": "` (colon-space) after the type.
-    // We're looser here — accept any leading whitespace after the colon,
-    // matching what spike #4 actually observed.
-    crate::llm::types::Queryable {
-        type_,
-        text: rest.trim().to_owned(),
-    }
 }
 
 /// Filter `Queryable`s to those that mention at least one term from the
@@ -200,6 +199,37 @@ pub fn fallback_queryables(
         out.retain(|q| q.type_ != crate::llm::types::QueryType::Lex);
     }
     out
+}
+
+/// Apply the lex-exclusion + empty-check + fallback step that qmd's
+/// `expandQuery` performs after `hasQueryTerm` filtering (TS lines 1497-1506).
+///
+/// # qmd parity — do not invert the order
+///
+/// `lex` exclusion happens **before** the empty check on purpose: if the
+/// filtered candidate list contains only `lex` entries and `include_lexical`
+/// is `false`, the result must fall through to the hyde+vec fallback rather
+/// than silently returning an empty list. Inverting these two steps (as the
+/// pre-fix rqmd did) was the divergence this function exists to lock down.
+pub fn finalize_expand_query(
+    filtered: Vec<crate::llm::types::Queryable>,
+    query: &str,
+    include_lexical: bool,
+    hyde_template: &str,
+) -> Vec<crate::llm::types::Queryable> {
+    use crate::llm::types::QueryType;
+    let after_lex: Vec<_> = if include_lexical {
+        filtered
+    } else {
+        filtered
+            .into_iter()
+            .filter(|q| q.type_ != QueryType::Lex)
+            .collect()
+    };
+    if after_lex.is_empty() {
+        return fallback_queryables(query, include_lexical, hyde_template);
+    }
+    after_lex
 }
 
 #[cfg(test)]

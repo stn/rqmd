@@ -52,7 +52,7 @@ use crate::llm::pull;
 use crate::llm::traits::{LlamaToken, Llm};
 use crate::llm::types::{
     EmbedOptions, EmbeddingResult, ExpandQueryOptions, GenerateOptions, GenerateResult, ModelInfo,
-    ModelResolutionConfig, PullOptions, QueryType, Queryable, RerankDocument, RerankDocumentResult,
+    ModelResolutionConfig, PullOptions, Queryable, RerankDocument, RerankDocumentResult,
     RerankOptions, RerankResult,
 };
 use crate::llm::worker::{EmbedPool, EmbedWorker, RerankPool, RerankWorker, split_into_chunks};
@@ -713,21 +713,12 @@ impl Llm for LlamaCpp {
 
         let parsed = prompt::parse_expand_query_output(&raw_text);
         let filtered = prompt::filter_with_query_terms(&query_owned, parsed);
-        if filtered.is_empty() {
-            return Ok(prompt::fallback_queryables(
-                &query_owned,
-                include_lexical,
-                &hyde_template,
-            ));
-        }
-        Ok(if include_lexical {
-            filtered
-        } else {
-            filtered
-                .into_iter()
-                .filter(|q| q.type_ != QueryType::Lex)
-                .collect()
-        })
+        Ok(prompt::finalize_expand_query(
+            filtered,
+            &query_owned,
+            include_lexical,
+            &hyde_template,
+        ))
     }
 
     async fn rerank(
