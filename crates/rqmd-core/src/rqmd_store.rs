@@ -35,19 +35,32 @@
 //! store is dropped. Otherwise the underlying [`LlamaCpp`] worker threads
 //! leak until process exit.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
-use crate::collections::{Collection, Config, ConfigData};
+use crate::collections::{Collection, Config, ConfigData, ModelsConfig};
+use crate::env_keys;
 use crate::llm::config::{ResolvedModels, resolve_embed_model, resolve_models};
+use crate::llm::device::{LlamaBackendDeviceType, probe_devices};
+use crate::llm::format::format_doc_for_embedding;
 use crate::llm::llama_cpp::{LlamaCpp, LlamaCppConfig};
+use crate::llm::pull::inspect_cached_model;
+use crate::llm::session::{LlmSession, LlmSessionOptions};
 use crate::llm::traits::Llm;
-use crate::llm::types::ModelResolutionConfig;
+use crate::llm::types::{EmbedOptions as LlmEmbedOptions, ModelResolutionConfig};
 use crate::store::DEFAULT_MULTI_GET_MAX_BYTES;
 use crate::store::Store;
 use crate::store::cache::clear_cache;
 use crate::store::chunking::ChunkStrategy;
 use crate::store::context::{CollectionListing, list_collections as store_list_collections};
+use crate::store::doctor::{self as docsql, FingerprintGroup};
+use crate::store::documents::extract_title;
+use crate::store::embeddings::{
+    cosine_distance, get_hashes_needing_embedding, get_stored_embedding, nearest_vector,
+    vec_table_exists,
+};
 use crate::store::lookup::{
     FindDocumentOptions, FindDocumentOutcome, FindDocumentsOptions, FindDocumentsResult,
     find_document, find_documents, get_document_body,
@@ -60,6 +73,7 @@ use crate::store::store_config::{
     get_store_contexts, get_store_global_context, remove_store_context, rename_store_collection,
     set_store_global_context, sync_config_to_db, update_store_context, upsert_store_collection,
 };
+use crate::store_ops::chunk_tokens::chunk_document_by_tokens;
 use crate::store_ops::{
     EmbedOptions, EmbedResult, ExpandedQuery, HybridQueryOptions, HybridQueryResult, SearchHooks,
     StructuredSearchOptions, VectorSearchOptions, VectorSearchResult,
@@ -190,6 +204,163 @@ pub struct AddCollectionOptions {
     /// `Config::add_collection` does not accept `ignore` (matches TS
     /// `collectionsAddCollection`, `index.ts:439`).
     pub ignore: Option<Vec<String>>,
+}
+
+// ============================================================================
+// Doctor DTOs
+// ============================================================================
+
+/// Cosine-distance threshold for "reproduces the stored vector" (qmd parity).
+pub const VECTOR_MATCH_THRESHOLD: f64 = 0.0001;
+/// Default wall-clock budget for LLM-backed doctor checks (qmd parity).
+pub const DEFAULT_DOCTOR_LLM_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Structured result of [`RqmdStore::doctor_report`]. Mirrors the data
+/// `rqmd doctor` displays; the CLI is just a formatter on top of this.
+#[derive(Debug, Clone)]
+pub struct DoctorReport {
+    pub db_path: PathBuf,
+    pub sqlite_version: String,
+    pub vec_version: Option<String>,
+    pub collection_count: usize,
+    pub configured_models: Option<ModelsConfig>,
+    pub resolved_models: ResolvedModels,
+    pub model_cache: Vec<CachedModelEntry>,
+    pub env_overrides: Vec<EnvOverride>,
+    /// `device_mode()` snapshot at report time (e.g. `"auto"`, `"metal"`,
+    /// `"CPU forced (RQMD_FORCE_CPU)"`).
+    pub device_mode: String,
+    /// `true` when `RQMD_DOCTOR_DEVICE_PROBE` skipped the probe.
+    pub device_probe_skipped: bool,
+    /// `Err` from the underlying llama backend probe, if any. `None` when
+    /// the probe succeeded or was skipped.
+    pub device_probe_error: Option<String>,
+    /// Empty when `device_probe_skipped` is `true` or the probe errored.
+    pub devices: Vec<DeviceInfo>,
+    pub cpu_cores: usize,
+    pub needs_embedding: i64,
+    pub fingerprint_groups: Vec<FingerprintGroup>,
+    /// Legacy (empty-fingerprint) rows observed for the active embed model.
+    /// `doctor_report` itself does **not** write; call
+    /// [`RqmdStore::adopt_legacy_embeddings`] to actually adopt.
+    pub legacy_pending: Option<LegacyPending>,
+    /// Always present — see [`VectorSampleStatus`] for the skip variants.
+    pub vector_sample: VectorSampleCheck,
+    /// Active embed model URI (cached here so CLI / SDK consumers don't have
+    /// to re-resolve to format messages).
+    pub active_embed_model: String,
+    /// Current embedding fingerprint for `active_embed_model`.
+    pub active_embed_fingerprint: String,
+}
+
+/// One entry in the resolved model cache view.
+#[derive(Debug, Clone)]
+pub struct CachedModelEntry {
+    pub model_uri: String,
+    pub used_for_embed: bool,
+    pub used_for_generate: bool,
+    pub used_for_rerank: bool,
+    /// `Some(path)` when a valid cached GGUF exists.
+    pub path: Option<PathBuf>,
+    /// Diagnostics for cached-but-invalid files (`<path>: <detail>` strings).
+    pub invalid: Vec<String>,
+}
+
+/// One environment variable rqmd actually reads, with a human-readable
+/// `consequence` explaining why it matters.
+#[derive(Debug, Clone)]
+pub struct EnvOverride {
+    pub name: String,
+    pub value: String,
+    pub consequence: String,
+}
+
+/// One probed llama backend device.
+#[derive(Debug, Clone)]
+pub struct DeviceInfo {
+    pub device_type: LlamaBackendDeviceType,
+    pub backend: String,
+    pub name: String,
+    pub description: String,
+    pub memory_total: usize,
+    pub memory_free: usize,
+}
+
+/// Observation that legacy (empty-fingerprint) rows exist for the active
+/// embed model. The report stage never writes — calling
+/// [`RqmdStore::adopt_legacy_embeddings`] is what actually stamps them.
+#[derive(Debug, Clone)]
+pub struct LegacyPending {
+    pub model: String,
+    pub legacy_distinct_hashes: i64,
+    /// One representative `(hash, seq)` from the legacy rows, or `None` when
+    /// no active document references any of them.
+    pub sample_hash_seq: Option<String>,
+    /// Physical preconditions for adoption are met: the embed model is
+    /// cached and a `vectors_vec` table exists. Note this is *necessary but
+    /// not sufficient*: if no active document references any legacy row,
+    /// [`RqmdStore::adopt_legacy_embeddings`] still returns `Ok(None)`.
+    pub adoption_possible: bool,
+}
+
+/// Result of [`RqmdStore::adopt_legacy_embeddings`].
+#[derive(Debug, Clone)]
+pub struct LegacyAdoptionOutcome {
+    pub model: String,
+    pub fingerprint: String,
+    /// `(hash, seq)` of the sample chunk that was re-embedded to verify
+    /// equivalence before adopting.
+    pub sample_hash_seq: String,
+    /// Cosine distance between the re-embedded sample and the stored vector.
+    pub sample_distance: f64,
+    /// `true` when the sample matched within [`VECTOR_MATCH_THRESHOLD`] and
+    /// the UPDATE was issued.
+    pub adopted: bool,
+    /// Rows updated by the adoption UPDATE (0 when `adopted == false`).
+    pub adopted_rows: usize,
+    /// Diagnostic shown to the user (e.g. "sample h1_0 matched..."), mirrors
+    /// CLI `legacy fingerprint adoption` details.
+    pub reason: String,
+}
+
+/// Result of the embedding-vector-sample check. Always reported (even when
+/// the heavy check could not run) so CLI / SDK consumers can render a
+/// qmd-parity diagnostic line.
+#[derive(Debug, Clone)]
+pub struct VectorSampleCheck {
+    pub model: String,
+    pub fingerprint: String,
+    pub threshold: f64,
+    pub status: VectorSampleStatus,
+}
+
+/// Why the embedding-vector-sample check resolved as it did. The first four
+/// variants are "could not / did not need to sample"; [`Self::Sampled`] is the
+/// only one where re-embedding actually happened.
+#[derive(Debug, Clone)]
+pub enum VectorSampleStatus {
+    /// No active documents in the index — nothing to verify (qmd parity: ok).
+    NoActiveDocuments,
+    /// The `vectors_vec` virtual table does not exist yet — `rqmd embed` has
+    /// not run.
+    NoVectorTable,
+    /// Embed model GGUF is not cached locally — needs `rqmd pull`.
+    ModelNotCached,
+    /// `vectors_vec` exists but no rows under the current `(model, fingerprint)`.
+    NoCurrentChunks,
+    /// Sampling actually ran. `failures.is_empty()` ⇔ qmd ✓.
+    Sampled {
+        sampled: usize,
+        passed: usize,
+        failures: Vec<VectorSampleFailure>,
+    },
+}
+
+/// One failing sample inside [`VectorSampleStatus::Sampled::failures`].
+#[derive(Debug, Clone)]
+pub struct VectorSampleFailure {
+    pub hash_seq: String,
+    pub reason: String,
 }
 
 // ============================================================================
@@ -701,11 +872,685 @@ impl RqmdStore {
         let fingerprint = crate::llm::embedding_fingerprint(&model);
         Ok(self.inner.get_index_health(&model, &fingerprint)?)
     }
+
+    // ── Doctor ──────────────────────────────────────────────────────────
+
+    /// Structured `rqmd doctor` report. Read-only — the only write path
+    /// (legacy fingerprint adoption) is exposed separately via
+    /// [`RqmdStore::adopt_legacy_embeddings`].
+    ///
+    /// `timeout` caps the LLM session budget for the embedding-vector-sample
+    /// check; `None` falls back to [`DEFAULT_DOCTOR_LLM_TIMEOUT`] (qmd parity:
+    /// 600 s). Heavy checks (`vector_sample`, `legacy_pending.adoption_possible`)
+    /// require the embed model to be cached and a `vectors_vec` table to
+    /// exist; otherwise they are reported as `None` / `false` rather than
+    /// erroring.
+    pub async fn doctor_report(&self, timeout: Option<Duration>) -> Result<DoctorReport> {
+        let resolved = self.resolved_models();
+        let configured: Option<ModelsConfig> =
+            self.config.as_ref().and_then(|c| c.data().models.clone());
+        let model = resolved.embed.clone();
+        let fingerprint = crate::llm::embedding_fingerprint(&model);
+
+        let sqlite_version = self
+            .inner
+            .with_connection(|c| {
+                c.query_row("SELECT sqlite_version()", [], |r| r.get::<_, String>(0))
+            })
+            .map_err(crate::store::Error::from)?;
+        let vec_version = self
+            .inner
+            .with_connection(|c| c.query_row("SELECT vec_version()", [], |r| r.get::<_, String>(0)))
+            .ok();
+
+        let collection_count = self
+            .inner
+            .with_connection(store_list_collections)
+            .map(|c| c.len())
+            .unwrap_or(0);
+
+        let model_cache = collect_model_cache(&resolved);
+        let env_overrides = collect_environment_overrides(&resolved, &configured);
+
+        let (device_mode, device_probe_skipped, device_probe_error, devices) =
+            collect_device_info();
+        let cpu_cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0);
+
+        let needs_embedding = self
+            .inner
+            .with_connection(|c| get_hashes_needing_embedding(c, None, &model, &fingerprint))?;
+        let fingerprint_groups = self
+            .inner
+            .with_connection(docsql::fingerprint_groups)
+            .unwrap_or_default();
+
+        // Cached preconditions shared by `collect_legacy_pending` and the
+        // vector-sample gate — computed once so the same SQL / filesystem
+        // probe isn't re-run two or three times during one report.
+        let vec_table = self
+            .inner
+            .with_connection(vec_table_exists)
+            .unwrap_or(false);
+        let model_cached = inspect_cached_model(&model).path.is_some();
+
+        let legacy_pending = self.collect_legacy_pending(&model, vec_table, model_cached)?;
+
+        // Avoid instantiating the LLM unless we will actually call into it:
+        // CI / model-less environments hit one of the early skip branches.
+        let session_timeout = timeout.unwrap_or(DEFAULT_DOCTOR_LLM_TIMEOUT);
+        let vector_sample = if vec_table && model_cached {
+            run_vector_sample_check(
+                &self.inner,
+                self.llm(),
+                &model,
+                &fingerprint,
+                session_timeout,
+            )
+            .await?
+        } else {
+            let active = self
+                .inner
+                .with_connection(docsql::count_active_documents)
+                .unwrap_or(0);
+            let status = if active == 0 {
+                VectorSampleStatus::NoActiveDocuments
+            } else if !vec_table {
+                VectorSampleStatus::NoVectorTable
+            } else {
+                VectorSampleStatus::ModelNotCached
+            };
+            VectorSampleCheck {
+                model: model.clone(),
+                fingerprint: fingerprint.clone(),
+                threshold: VECTOR_MATCH_THRESHOLD,
+                status,
+            }
+        };
+
+        Ok(DoctorReport {
+            db_path: self.inner.db_path.clone(),
+            sqlite_version,
+            vec_version,
+            collection_count,
+            configured_models: configured,
+            resolved_models: resolved,
+            model_cache,
+            env_overrides,
+            device_mode,
+            device_probe_skipped,
+            device_probe_error,
+            devices,
+            cpu_cores,
+            needs_embedding,
+            fingerprint_groups,
+            legacy_pending,
+            vector_sample,
+            active_embed_model: model,
+            active_embed_fingerprint: fingerprint,
+        })
+    }
+
+    /// Adopt legacy (empty-fingerprint) embedding rows for the active embed
+    /// model: re-embed one sample chunk, confirm it reproduces the stored
+    /// vector within [`VECTOR_MATCH_THRESHOLD`], then stamp the current
+    /// fingerprint onto every legacy row for the model.
+    ///
+    /// Returns `Ok(None)` when there is nothing to adopt, the embed model is
+    /// not cached, or the `vectors_vec` table does not exist. `timeout`
+    /// caps the LLM session budget; `None` uses [`DEFAULT_DOCTOR_LLM_TIMEOUT`].
+    pub async fn adopt_legacy_embeddings(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Result<Option<LegacyAdoptionOutcome>> {
+        let model = self.resolved_models().embed;
+        let fingerprint = crate::llm::embedding_fingerprint(&model);
+
+        let legacy = self
+            .inner
+            .with_connection(|c| docsql::count_legacy_distinct_hashes(c, &model))?;
+        if legacy == 0 {
+            return Ok(None);
+        }
+        if !self
+            .inner
+            .with_connection(vec_table_exists)
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+        if inspect_cached_model(&model).path.is_none() {
+            return Ok(None);
+        }
+        let Some(sample) = self
+            .inner
+            .with_connection(|c| docsql::sample_legacy_chunk(c, &model))?
+        else {
+            return Ok(None);
+        };
+
+        let expected = format!("{}_{}", sample.hash, sample.seq);
+        let title = extract_title(&sample.body, &sample.path);
+        let session = LlmSession::new(
+            self.llm(),
+            LlmSessionOptions {
+                max_duration: Some(timeout.unwrap_or(DEFAULT_DOCTOR_LLM_TIMEOUT)),
+                name: Some("doctorLegacyAdoption".into()),
+            },
+        );
+
+        let embedding = async {
+            let chunks = chunk_document_by_tokens(
+                session.clone(),
+                &sample.body,
+                None,
+                None,
+                None,
+                Some(&sample.path),
+                ChunkStrategy::Auto,
+                Some(session.signal()),
+            )
+            .await
+            .ok()?;
+            let chunk = chunks.get(sample.seq as usize)?;
+            let formatted = format_doc_for_embedding(&chunk.text, Some(&title), &model);
+            let result = session
+                .embed(
+                    &formatted,
+                    LlmEmbedOptions {
+                        model: Some(model.clone()),
+                        is_query: false,
+                        title: None,
+                    },
+                )
+                .await
+                .ok()??;
+            Some(result.embedding)
+        }
+        .await;
+        session.release();
+
+        let Some(embedding) = embedding else {
+            return Ok(Some(LegacyAdoptionOutcome {
+                model: model.clone(),
+                fingerprint,
+                sample_hash_seq: expected,
+                sample_distance: f64::INFINITY,
+                adopted: false,
+                adopted_rows: 0,
+                reason: "failed to embed legacy sample".into(),
+            }));
+        };
+
+        let nearest = self
+            .inner
+            .with_connection(|c| nearest_vector(c, &embedding))?;
+        let Some((hash_seq, distance)) = nearest else {
+            return Ok(Some(LegacyAdoptionOutcome {
+                model: model.clone(),
+                fingerprint,
+                sample_hash_seq: expected,
+                sample_distance: f64::INFINITY,
+                adopted: false,
+                adopted_rows: 0,
+                reason: "legacy sample vector not found".into(),
+            }));
+        };
+        if hash_seq != expected || distance > VECTOR_MATCH_THRESHOLD {
+            return Ok(Some(LegacyAdoptionOutcome {
+                model: model.clone(),
+                fingerprint,
+                sample_hash_seq: expected,
+                sample_distance: distance,
+                adopted: false,
+                adopted_rows: 0,
+                reason: format!(
+                    "legacy sample differs from current fingerprint (nearest {hash_seq}, distance {distance:.6})"
+                ),
+            }));
+        }
+
+        let adopted_rows = self
+            .inner
+            .with_connection_mut(|c| docsql::adopt_legacy_fingerprint(c, &model, &fingerprint))?;
+        let reason =
+            format!("sample {expected} matched current fingerprint at distance {distance:.6}");
+        Ok(Some(LegacyAdoptionOutcome {
+            model,
+            fingerprint,
+            sample_hash_seq: expected,
+            sample_distance: distance,
+            adopted: adopted_rows > 0,
+            adopted_rows,
+            reason,
+        }))
+    }
+
+    fn collect_legacy_pending(
+        &self,
+        model: &str,
+        vec_table: bool,
+        model_cached: bool,
+    ) -> Result<Option<LegacyPending>> {
+        let legacy = self
+            .inner
+            .with_connection(|c| docsql::count_legacy_distinct_hashes(c, model))?;
+        if legacy == 0 {
+            return Ok(None);
+        }
+        let sample = self
+            .inner
+            .with_connection(|c| docsql::sample_legacy_chunk(c, model))?
+            .map(|s| format!("{}_{}", s.hash, s.seq));
+        Ok(Some(LegacyPending {
+            model: model.to_string(),
+            legacy_distinct_hashes: legacy,
+            sample_hash_seq: sample,
+            adoption_possible: vec_table && model_cached,
+        }))
+    }
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// `device_mode()` snapshot. Mirrors qmd `configuredGpuModeLabel`.
+fn device_mode() -> String {
+    if is_force_cpu() {
+        return "CPU forced (RQMD_FORCE_CPU)".to_string();
+    }
+    if let Ok(v) = std::env::var(env_keys::LLAMA_GPU) {
+        let t = v.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    "auto".to_string()
+}
+
+fn is_force_cpu() -> bool {
+    match std::env::var(env_keys::FORCE_CPU) {
+        Ok(v) => {
+            let t = v.trim().to_ascii_lowercase();
+            !t.is_empty()
+                && !matches!(
+                    t.as_str(),
+                    "false" | "off" | "none" | "disable" | "disabled" | "0"
+                )
+        }
+        Err(_) => false,
+    }
+}
+
+fn env_value_for_display(value: &str) -> String {
+    if value.chars().count() > 96 {
+        let head: String = value.chars().take(93).collect();
+        format!("{head}...")
+    } else {
+        value.to_string()
+    }
+}
+
+fn model_config<'a>(
+    configured: &'a Option<ModelsConfig>,
+    pick: impl Fn(&'a ModelsConfig) -> &'a Option<String>,
+) -> Option<&'a str> {
+    configured.as_ref().and_then(|m| pick(m).as_deref())
+}
+
+fn push_model_override(
+    out: &mut Vec<EnvOverride>,
+    name: &str,
+    key: &str,
+    active: &str,
+    configured: Option<&str>,
+) {
+    let Ok(raw) = std::env::var(name) else {
+        return;
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return;
+    }
+    let consequence = match configured {
+        Some(c) if c != raw => {
+            format!("set but ignored because index models.{key} is configured as {c}")
+        }
+        _ => format!(
+            "sets the active {key} model to {active}; changes embedding/search semantics and may require `rqmd pull` plus `rqmd embed`"
+        ),
+    };
+    out.push(EnvOverride {
+        name: name.to_string(),
+        value: env_value_for_display(raw),
+        consequence,
+    });
+}
+
+/// Collect every `RQMD_*` / known env var that rqmd reads at runtime, with
+/// a human-readable `consequence`. Port of CLI `collect_environment_overrides`.
+fn collect_environment_overrides(
+    resolved: &ResolvedModels,
+    configured: &Option<ModelsConfig>,
+) -> Vec<EnvOverride> {
+    let mut out: Vec<EnvOverride> = Vec::new();
+
+    macro_rules! add {
+        ($name:expr, $consequence:expr) => {
+            if let Ok(raw) = std::env::var($name) {
+                let raw = raw.trim();
+                if !raw.is_empty() {
+                    out.push(EnvOverride {
+                        name: $name.to_string(),
+                        value: env_value_for_display(raw),
+                        consequence: ($consequence).to_string(),
+                    });
+                }
+            }
+        };
+    }
+
+    add!(
+        "RQMD_INDEX_PATH",
+        "overrides the SQLite index path; rqmd reads/writes a different database"
+    );
+    add!(
+        "RQMD_CONFIG_DIR",
+        "overrides the rqmd config directory and takes precedence over XDG_CONFIG_HOME"
+    );
+    add!(
+        "RQMD_CACHE_DIR",
+        "overrides the rqmd cache directory (index cache and model cache)"
+    );
+    add!(
+        "XDG_CONFIG_HOME",
+        "moves rqmd config to $XDG_CONFIG_HOME/qmd when RQMD_CONFIG_DIR is not set"
+    );
+    add!(
+        "XDG_CACHE_HOME",
+        "moves the default index cache and model cache"
+    );
+
+    push_model_override(
+        &mut out,
+        env_keys::EMBED_MODEL,
+        "embed",
+        &resolved.embed,
+        model_config(configured, |m| &m.embed),
+    );
+    push_model_override(
+        &mut out,
+        env_keys::GENERATE_MODEL,
+        "generate",
+        &resolved.generate,
+        model_config(configured, |m| &m.generate),
+    );
+    push_model_override(
+        &mut out,
+        env_keys::RERANK_MODEL,
+        "rerank",
+        &resolved.rerank,
+        model_config(configured, |m| &m.rerank),
+    );
+
+    add!(
+        env_keys::FORCE_CPU,
+        "forces llama.cpp to bypass GPU backends; embeddings/query will be slower but GPU crashes are avoided"
+    );
+    add!(
+        env_keys::LLAMA_GPU,
+        "selects llama.cpp GPU backend (metal/cuda/vulkan) or disables GPU when set to false/off/0"
+    );
+    add!(
+        env_keys::DOCTOR_DEVICE_PROBE,
+        "controls rqmd doctor native device probing; 0/off skips GPU probing"
+    );
+    add!(
+        env_keys::EMBED_PARALLELISM,
+        "overrides embedding parallel context count; too high can exhaust RAM/VRAM"
+    );
+    add!(
+        env_keys::RERANK_PARALLELISM,
+        "overrides reranker parallel context count; too high can exhaust RAM/VRAM"
+    );
+    add!(
+        env_keys::EXPAND_CONTEXT_SIZE,
+        "overrides query expansion context size; larger values use more memory"
+    );
+    add!(
+        env_keys::RERANK_CONTEXT_SIZE,
+        "overrides reranker context size; larger values use more memory"
+    );
+    add!(
+        env_keys::EMBED_CONTEXT_SIZE,
+        "overrides embed context size; larger values use more memory"
+    );
+    add!(
+        "RQMD_EDITOR_URI",
+        "overrides clickable editor link template in terminal output"
+    );
+    add!(
+        "RQMD_SKILLS_DIR",
+        "overrides where rqmd skills are discovered from"
+    );
+    add!("NO_COLOR", "disables colored terminal output");
+    add!(
+        "CI",
+        "disables real LLM operations inside rqmd's LlamaCpp wrapper"
+    );
+    add!(
+        "HF_ENDPOINT",
+        "changes Hugging Face download endpoint used when pulling models"
+    );
+    add!("WSL_DISTRO_NAME", "enables WSL path handling heuristics");
+    add!("WSL_INTEROP", "enables WSL path handling heuristics");
+
+    out
+}
+
+/// Per-URI model cache view: dedup `embed`/`generate`/`rerank` URIs (preserve
+/// first-seen order) and inspect each with [`inspect_cached_model`].
+fn collect_model_cache(resolved: &ResolvedModels) -> Vec<CachedModelEntry> {
+    let roles: [(&str, &str); 3] = [
+        ("embed", resolved.embed.as_str()),
+        ("generate", resolved.generate.as_str()),
+        ("rerank", resolved.rerank.as_str()),
+    ];
+
+    let mut order: Vec<String> = Vec::new();
+    let mut roles_by: HashMap<String, [bool; 3]> = HashMap::new();
+    for (role, uri) in roles {
+        let entry = roles_by.entry(uri.to_string()).or_insert_with(|| {
+            order.push(uri.to_string());
+            [false; 3]
+        });
+        match role {
+            "embed" => entry[0] = true,
+            "generate" => entry[1] = true,
+            "rerank" => entry[2] = true,
+            _ => {}
+        }
+    }
+
+    order
+        .into_iter()
+        .map(|uri| {
+            let flags = roles_by[&uri];
+            let inspection = inspect_cached_model(&uri);
+            CachedModelEntry {
+                model_uri: uri,
+                used_for_embed: flags[0],
+                used_for_generate: flags[1],
+                used_for_rerank: flags[2],
+                path: inspection.path,
+                invalid: inspection.invalid,
+            }
+        })
+        .collect()
+}
+
+/// Probe llama backend devices, gated by `RQMD_DOCTOR_DEVICE_PROBE`.
+/// Returns `(device_mode, skipped, probe_error, devices)`.
+fn collect_device_info() -> (String, bool, Option<String>, Vec<DeviceInfo>) {
+    let mode = device_mode();
+    let skip = matches!(
+        std::env::var(env_keys::DOCTOR_DEVICE_PROBE)
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref(),
+        Ok("0" | "false" | "off" | "no" | "skip")
+    );
+    if skip {
+        return (mode, true, None, Vec::new());
+    }
+    match probe_devices() {
+        Ok(devs) => {
+            let infos = devs
+                .into_iter()
+                .map(|d| DeviceInfo {
+                    device_type: d.device_type,
+                    backend: d.backend,
+                    name: d.name,
+                    description: d.description,
+                    memory_total: d.memory_total,
+                    memory_free: d.memory_free,
+                })
+                .collect();
+            (mode, false, None, infos)
+        }
+        Err(e) => (mode, false, Some(e.to_string()), Vec::new()),
+    }
+}
+
+/// Sample up to 3 chunks under `(model, fingerprint)`, re-chunk + re-embed
+/// each, and compare to the stored vector. Always returns a
+/// [`VectorSampleCheck`]; the `status` distinguishes "actually sampled" from
+/// the four skip reasons.
+async fn run_vector_sample_check(
+    store: &Store,
+    llm: Arc<LlamaCpp>,
+    model: &str,
+    fingerprint: &str,
+    timeout: Duration,
+) -> Result<VectorSampleCheck> {
+    let mk = |status: VectorSampleStatus| VectorSampleCheck {
+        model: model.to_string(),
+        fingerprint: fingerprint.to_string(),
+        threshold: VECTOR_MATCH_THRESHOLD,
+        status,
+    };
+
+    let active = store
+        .with_connection(docsql::count_active_documents)
+        .unwrap_or(0);
+    if active == 0 {
+        return Ok(mk(VectorSampleStatus::NoActiveDocuments));
+    }
+    if !store.with_connection(vec_table_exists).unwrap_or(false) {
+        return Ok(mk(VectorSampleStatus::NoVectorTable));
+    }
+    if inspect_cached_model(model).path.is_none() {
+        return Ok(mk(VectorSampleStatus::ModelNotCached));
+    }
+    let samples = store
+        .with_connection(|c| docsql::sample_current_chunks(c, model, fingerprint, 3))
+        .unwrap_or_default();
+    if samples.is_empty() {
+        return Ok(mk(VectorSampleStatus::NoCurrentChunks));
+    }
+
+    let session = LlmSession::new(
+        llm,
+        LlmSessionOptions {
+            max_duration: Some(timeout),
+            name: Some("doctorEmbeddingVectorSample".into()),
+        },
+    );
+
+    let total = samples.len();
+    let mut failures: Vec<VectorSampleFailure> = Vec::new();
+    for sample in samples {
+        let hash_seq = format!("{}_{}", sample.hash, sample.seq);
+
+        let chunks = match chunk_document_by_tokens(
+            session.clone(),
+            &sample.body,
+            None,
+            None,
+            None,
+            Some(&sample.path),
+            ChunkStrategy::Auto,
+            Some(session.signal()),
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(_) => {
+                failures.push(VectorSampleFailure {
+                    hash_seq,
+                    reason: "chunk no longer exists".into(),
+                });
+                continue;
+            }
+        };
+        let Some(chunk) = chunks.get(sample.seq as usize) else {
+            failures.push(VectorSampleFailure {
+                hash_seq,
+                reason: "chunk no longer exists".into(),
+            });
+            continue;
+        };
+        let title = extract_title(&sample.body, &sample.path);
+        let formatted = format_doc_for_embedding(&chunk.text, Some(&title), model);
+        let embedding = match session
+            .embed(
+                &formatted,
+                LlmEmbedOptions {
+                    model: Some(model.to_string()),
+                    is_query: false,
+                    title: None,
+                },
+            )
+            .await
+        {
+            Ok(Some(r)) => r.embedding,
+            _ => {
+                failures.push(VectorSampleFailure {
+                    hash_seq,
+                    reason: "embedding failed".into(),
+                });
+                continue;
+            }
+        };
+        let stored = store
+            .with_connection(|c| get_stored_embedding(c, &hash_seq))
+            .ok()
+            .flatten();
+        let Some(stored) = stored else {
+            failures.push(VectorSampleFailure {
+                hash_seq,
+                reason: "stored vector missing".into(),
+            });
+            continue;
+        };
+        let distance = cosine_distance(&embedding, &stored);
+        if distance > VECTOR_MATCH_THRESHOLD {
+            failures.push(VectorSampleFailure {
+                hash_seq,
+                reason: format!("stored vector distance {distance:.6}"),
+            });
+        }
+    }
+    session.release();
+
+    let passed = total - failures.len();
+    Ok(mk(VectorSampleStatus::Sampled {
+        sampled: total,
+        passed,
+        failures,
+    }))
+}
 
 fn config_models(cfg: Option<&Config>) -> ModelResolutionConfig {
     cfg.map(|c| {
