@@ -2,8 +2,9 @@
 //! `remove_context`, `update_collection_settings`, `rename_collection`,
 //! the `data()` / `into_data()` accessors, and `find_context_for_path`.
 
+use rqmd_core::collections::Error;
 use rqmd_core::{
-    Collection, CollectionSettings, Config, ConfigData, Error, IncludeByDefaultField, UpdateField,
+    Collection, CollectionSettings, Config, ConfigData, IncludeByDefaultField, UpdateField,
 };
 
 fn config_with_one_collection() -> Config {

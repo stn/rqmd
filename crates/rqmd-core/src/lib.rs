@@ -7,8 +7,9 @@
 //!
 //! * [`collections`] — workspace YAML + inline configuration (Rust equivalent
 //!   of `collections.ts`). Provides `Config`, `ConfigData`, `Collection`,
-//!   `ContextEntry`, etc.; the crate-root `Error`/`Result` aliases continue
-//!   to point at this module.
+//!   `ContextEntry`, etc. Module-specific errors are accessed as
+//!   `rqmd_core::collections::Error` (the crate-root `Error` is the
+//!   `rqmd_store` aggregator).
 //! * [`db`] — SQLite connection management (`db.ts`). Downstream callers
 //!   access SQLite types as `rqmd_core::db::Connection`,
 //!   `rqmd_core::db::open_database`, etc.; no items from `db` are hoisted to
@@ -70,22 +71,23 @@ pub mod store;
 pub mod store_ops;
 
 pub use collections::{
-    Collection, CollectionSettings, Config, ConfigData, ContextEntry, ContextMap, Error,
+    Collection, CollectionSettings, Config, ConfigData, ContextEntry, ContextMap,
     ExpandPromptConfig, ExpandSamplingConfig, IncludeByDefaultField, ModelsConfig,
-    NamedCollectionRef, Result, UpdateField, find_local_config_path, is_valid_collection_name,
+    NamedCollectionRef, UpdateField, find_local_config_path, is_valid_collection_name,
     local_db_path,
 };
-// Note: the crate-root `Error`/`Result` continue to be the
-// `collections::*` ones (matching the existing public API). The
-// `store::Error`/`Result`, `llm::Error`/`Result`, and `store_ops::Error`/
-// `Result` are accessed via their respective module paths (or
-// `StoreOpsError`/`StoreOpsResult` aliases for the latter).
+// Note: the crate-root `Error`/`Result` are the `rqmd_store::*` aggregators
+// (re-exported below). Module-specific errors are accessed via their own
+// paths: `collections::Error`, `store::Error`, `llm::Error`,
+// `store_ops::Error` (the last also available as `StoreOpsError`).
 
 pub use store::Store;
 pub use store::ast::{
     AstStatus, LangStatus, SupportedLanguage, detect_language, get_ast_break_points, get_ast_status,
 };
 pub use store::chunking::{BreakKind, BreakPoint, Chunk, ChunkStrategy, CodeFenceRegion};
+pub use store::context::CollectionListing;
+pub use store::lookup::{FindDocumentOptions, FindDocumentOutcome, FindDocumentsOptions};
 pub use store::reindex::{ReindexProgress, ReindexResult};
 pub use store::rrf::{
     HybridQueryExplain, QueryType, RRFContributionTrace, RRFExplain, RRFScoreTrace, RankedListMeta,
@@ -124,11 +126,13 @@ pub use store_ops::{
 
 // `RqmdStore`: combines [`Store`], [`LlamaCpp`], and [`Config`] into the
 // single object that `tobi/qmd`'s TypeScript `createStore()` returns.
-// Errors are exposed as `RqmdStoreError` to avoid colliding with the
-// `collections::Error` re-exported as crate-root `Error`.
+// `rqmd_store::Error` is the crate-root `Error` aggregator — it `#[from]`-
+// unions `store::Error`, `collections::Error`, `llm::Error`, and
+// `store_ops::Error`, so `?` propagation through `RqmdStore` methods
+// collapses to a single error type.
 pub use rqmd_store::{
-    AddCollectionOptions, Error as RqmdStoreError, MultiGetBundle, Result as RqmdStoreResult,
-    RqmdStore, RqmdStoreOptions, SearchOptions, UpdateOptions, UpdateProgress, UpdateResult,
+    AddCollectionOptions, Error, MultiGetBundle, Result, RqmdStore, RqmdStoreOptions,
+    SearchOptions, UpdateOptions, UpdateProgress, UpdateResult,
 };
 
 // Bench module re-exports (pure scoring + fixture/result types). The runner

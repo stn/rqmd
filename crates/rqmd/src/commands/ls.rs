@@ -131,7 +131,7 @@ pub fn run(a: LsArgs, state: &mut IndexState, p: &Palette) -> Result<()> {
 /// Supports `qmd://name/...`, `//name/...`, `name`, and `name/sub/path`.
 fn resolve_collection_arg(
     arg: &str,
-    known: &[rqmd_core::store::context::CollectionListing],
+    known: &[rqmd_core::CollectionListing],
 ) -> Result<(String, Option<String>)> {
     if is_virtual_path(arg) {
         let vp = parse_virtual_path(arg).map_err(|_| anyhow!("Invalid virtual path: {arg}"))?;
@@ -167,10 +167,7 @@ fn resolve_collection_arg(
     Ok((name, prefix))
 }
 
-fn longest_prefix_match<'a>(
-    s: &str,
-    known: &'a [rqmd_core::store::context::CollectionListing],
-) -> Option<&'a str> {
+fn longest_prefix_match<'a>(s: &str, known: &'a [rqmd_core::CollectionListing]) -> Option<&'a str> {
     known
         .iter()
         .filter(|c| s == c.name || s.starts_with(&format!("{}/", c.name)))
