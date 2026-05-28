@@ -130,9 +130,14 @@ pub use store_ops::{
 // unions `store::Error`, `collections::Error`, `llm::Error`, and
 // `store_ops::Error`, so `?` propagation through `RqmdStore` methods
 // collapses to a single error type.
+pub use llm::config::ResolvedModels;
+pub use store::doctor::FingerprintGroup;
+
 pub use rqmd_store::{
-    AddCollectionOptions, Error, MultiGetBundle, Result, RqmdStore, RqmdStoreOptions,
-    SearchOptions, UpdateOptions, UpdateProgress, UpdateResult,
+    AddCollectionOptions, CachedModelEntry, DEFAULT_DOCTOR_LLM_TIMEOUT, DeviceInfo, DoctorReport,
+    EnvOverride, Error, LegacyAdoptionOutcome, LegacyPending, MultiGetBundle, Result, RqmdStore,
+    RqmdStoreOptions, SearchOptions, UpdateOptions, UpdateProgress, UpdateResult,
+    VECTOR_MATCH_THRESHOLD, VectorSampleCheck, VectorSampleFailure, VectorSampleStatus,
 };
 
 // Bench module re-exports (pure scoring + fixture/result types). The runner
