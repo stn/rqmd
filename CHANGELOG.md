@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-28
+
+### Added
+
+- `RqmdStore::doctor_report` and `RqmdStore::adopt_legacy_embeddings` expose
+  the full `rqmd doctor` diagnostics — SQLite/sqlite-vec versions, resolved
+  vs. configured models, env overrides, device probe, fingerprint groups,
+  legacy-row count, embedding sample check — as an SDK-callable
+  `DoctorReport` struct. The CLI is now a thin formatter over these methods.
+
+### Changed
+
+- Crate-root `rqmd_core::Error` / `Result` now alias the `rqmd_store`
+  aggregator (Store ∪ Collections ∪ Llm ∪ StoreOps) instead of the
+  collections-only error. Bare `rqmd_core::Error` previously looked
+  general-purpose but silently caught only collections errors.
+- Removed the `RqmdStoreError` / `RqmdStoreResult` aliases; use
+  `rqmd_core::Error` / `Result` directly.
+- Re-exported `CollectionListing`, `FindDocumentOptions`,
+  `FindDocumentOutcome`, and `FindDocumentsOptions` at the crate root so
+  callers no longer need deep `store::lookup::*` / `store::context::*`
+  paths.
+
 ## [0.2.0] - 2026-05-27
 
 ### Breaking changes
