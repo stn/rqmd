@@ -13,12 +13,11 @@ use rmcp::model::{JsonObject, object};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use rqmd_core::store::lookup::FindDocumentOutcome;
 use rqmd_core::store::snippet::{add_line_numbers, extract_snippet};
 use rqmd_core::store::virtual_path::encode_qmd_path;
 use rqmd_core::{
-    CollectionInfo, ExpandedQuery, ExpandedQueryType, IndexStatus, MultiGetResult, RqmdStore,
-    SearchOptions,
+    CollectionInfo, ExpandedQuery, ExpandedQueryType, FindDocumentOutcome, IndexStatus,
+    MultiGetResult, RqmdStore, SearchOptions,
 };
 
 // ============================================================================

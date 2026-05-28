@@ -10,11 +10,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use rqmd_core::collections::{Collection, ConfigData, ContextMap};
-use rqmd_core::store::lookup::FindDocumentOutcome;
 use rqmd_core::store_ops::{ExpandedQuery, ExpandedQueryType};
 use rqmd_core::{
-    AddCollectionOptions, Config, RqmdStore, RqmdStoreError, RqmdStoreOptions, SearchOptions,
-    StoreOpsEmbedOptions, UpdateOptions, UpdateProgress,
+    AddCollectionOptions, Config, Error, FindDocumentOutcome, RqmdStore, RqmdStoreOptions,
+    SearchOptions, StoreOpsEmbedOptions, UpdateOptions, UpdateProgress,
 };
 use tempfile::TempDir;
 
@@ -99,7 +98,7 @@ fn open_rejects_both_config_inputs() {
         config: Some(ConfigData::default()),
     });
     let err = result.map(|_| ()).expect_err("should reject both");
-    assert!(matches!(err, RqmdStoreError::InvalidOptions(_)));
+    assert!(matches!(err, Error::InvalidOptions(_)));
 }
 
 // ============================================================================
@@ -260,7 +259,7 @@ async fn search_options_both_none_returns_error() {
         .search(SearchOptions::default())
         .await
         .expect_err("should error");
-    assert!(matches!(err, RqmdStoreError::MissingSearchQuery));
+    assert!(matches!(err, Error::MissingSearchQuery));
     // The validation error should not trigger LLM construction.
     assert!(!store.llm_initialized());
 }
@@ -664,7 +663,7 @@ fn rename_collection_errors_if_target_exists_store() {
     assert!(
         matches!(
             err,
-            RqmdStoreError::Collections(rqmd_core::collections::Error::DuplicateCollection(ref n))
+            Error::Collections(rqmd_core::collections::Error::DuplicateCollection(ref n))
                 if n == "b"
         ),
         "expected DuplicateCollection(\"b\"), got: {err:?}"

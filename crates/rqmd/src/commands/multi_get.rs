@@ -4,8 +4,9 @@
 //! Resolution is fully handled by `rqmd_core::store::lookup::find_documents`.
 
 use anyhow::Result;
+use rqmd_core::FindDocumentsOptions;
 use rqmd_core::store::DEFAULT_MULTI_GET_MAX_BYTES;
-use rqmd_core::store::lookup::{FindDocumentsOptions, find_documents};
+use rqmd_core::store::lookup::find_documents;
 
 use crate::cli::MultiGetArgs;
 use crate::output::{OutputFormat, write_multi_get};

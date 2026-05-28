@@ -4,9 +4,10 @@
 //! Most resolution work lives in `rqmd_core::store::lookup::find_document`.
 
 use anyhow::{Result, anyhow};
-use rqmd_core::store::lookup::{FindDocumentOptions, FindDocumentOutcome, find_document};
+use rqmd_core::store::lookup::find_document;
 use rqmd_core::store::snippet::add_line_numbers;
 use rqmd_core::store::virtual_path::{build_virtual_path, is_virtual_path, parse_virtual_path};
+use rqmd_core::{FindDocumentOptions, FindDocumentOutcome};
 
 use crate::cli::GetArgs;
 use crate::color::Palette;
