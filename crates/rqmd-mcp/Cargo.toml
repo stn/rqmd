@@ -21,7 +21,7 @@ rqmd-core = { workspace = true }
 #   transport-io                            — stdio() transport (default mode)
 #   transport-streamable-http-server[-session] — HTTP /mcp + LocalSessionManager
 #   tower                                   — mount the HTTP service in axum
-rmcp = { version = "1.7", default-features = false, features = [
+rmcp = { version = "2.1", default-features = false, features = [
     "server",
     "transport-io",
     "transport-streamable-http-server",
@@ -60,7 +60,7 @@ tokio = { version = "1", features = [
 # for `StreamableHttpClientTransport::from_uri` (the bare
 # `transport-streamable-http-client` only exposes bring-your-own-client ctors).
 # `client` pulls in the client half; `tempfile` seeds a throwaway index.
-rmcp     = { version = "1.7", default-features = false, features = [
+rmcp     = { version = "2.1", default-features = false, features = [
     "client",
     "transport-io",
     "transport-streamable-http-client-reqwest",
